@@ -1,0 +1,44 @@
+[package]
+name = "remqtt"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = [
+    "buffer", "queue-vec"
+]
+
+## Workspace wide dependencies
+[workspace.dependencies]
+thiserror = { version = "2.0.11", default-features = false }
+
+[dependencies]
+## From Workspace
+buffer = { version = "*", path = "./buffer"}
+queue-vec = { version = "*", path = "./queue-vec"}
+
+thiserror = { workspace = true, default-features = false }
+
+## Other
+embedded-io-async = "0.6.1"
+defmt = { version = "0.3.10", optional = true }
+heapless = "0.8.0"
+embassy-time = { version = "^0.4.0", default-features = false }
+embassy-futures = { version = "^0.1.1", features = ["defmt"] }
+
+[dependencies.embassy-sync]
+version = "0.6.2"
+default-features = false
+features = ["defmt"]
+
+[dependencies.mqttrs]
+version = "0.4"
+git = "https://github.com/00imvj00/mqttrs.git"
+rev = "0f1ce9d1afa564392dc87ed1ec9801bcb457a579"
+default-features = false
+features = ["defmt"]
+
+[features]
+default = [ "defmt" ]
+std = [ "embassy-sync/std" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt"]

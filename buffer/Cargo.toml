@@ -1,0 +1,26 @@
+[package]
+name = "buffer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+defmt = { version = "0.3.10", optional = true }
+embedded-io = { version = "0.6.1", optional = true }
+serde = { version = "1.0.217", default-features = false, features = ["derive"], optional = true }
+serde-json-core = { version = "0.6.0", default-features = false, features = ["defmt", "heapless"], optional = true }
+thiserror = { workspace = true, default-features = false }
+
+[features]
+default = [ "embedded", "std", "serde" ]
+std = []
+serde = [
+    "dep:serde",
+    "dep:serde-json-core"
+]
+embedded = [ 
+    "dep:embedded-io"
+]
+defmt = [
+    "dep:defmt"
+]
+
