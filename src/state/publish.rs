@@ -1,7 +1,6 @@
-use core::cell::RefCell;
 
 use buffer::BufferWriter;
-use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant};
 use mqttrs::{encode_slice, Error, Packet, Pid};
 use queue_vec::QueuedVec;
@@ -133,7 +132,6 @@ impl PublishRequest {
 
 pub(crate) struct PublishQueue {
     publishes: QueuedVec<CriticalSectionRawMutex, PublishRequest, MAX_CONCURRENT_PUBLISHES>,
-    pid_source: Mutex<CriticalSectionRawMutex, RefCell<Pid>>
 }
 
 impl PublishQueue {
@@ -141,25 +139,12 @@ impl PublishQueue {
     pub(crate) fn new() -> Self {
         Self {
             publishes: QueuedVec::new(),
-
-            pid_source: Mutex::new(RefCell::new(Pid::default()))
         }
     }
 
-    /// Genrates the next unique pid for the packet
-    fn next_pid(&self) -> Pid {
-        self.pid_source.lock(|pid|{
-            let mut pid = pid.borrow_mut();
-
-            let result = pid.clone();
-            *pid = result + 1;
-            result
-        })
-    }
-
     /// Adds a `MqttPublosh to the publish queue` 
-    pub(crate) async fn push_publish(&self, publish: MqttPublish, id: UniqueID) {
-        let request = PublishRequest::new(publish, self.next_pid(), id);
+    pub(crate) async fn push_publish(&self, publish: MqttPublish, id: UniqueID, pid: Pid) {
+        let request = PublishRequest::new(publish, pid, id);
         self.publishes.push(request).await;
     }
 

@@ -1,8 +1,5 @@
 #![macro_use]
 
-#[cfg(feature = "defmt")]
-pub(crate) use ::defmt::Debug2Format;
-
 #[collapse_debuginfo(yes)]
 macro_rules! trace {
     ($s:literal $(, $x:expr)* $(,)?) => {

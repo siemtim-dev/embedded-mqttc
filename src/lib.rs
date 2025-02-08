@@ -38,9 +38,9 @@ pub mod network;
 pub mod io;
 
 mod state;
-mod misc;
 
-#[derive(Debug, Error, defmt::Format, Clone)]
+#[derive(Debug, Error, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttError {
 
     #[error("TCP Connection failed")]
@@ -57,6 +57,9 @@ pub enum MqttError {
 
     #[error("Payload of received message is too long")]
     ReceivedMessageTooLong,
+
+    #[error("The suback / unsuback packet arrived with an error code")]
+    SubscribeOrUnsubscribeFailed
 }
 
 pub struct ClientCredentials {
@@ -74,6 +77,8 @@ pub const MQTT_PAYLOAD_MAX_SIZE: usize = 64;
 
 pub type Topic = heapless::String<MAX_TOPIC_SIZE>;
 
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MqttPublish {
     pub topic: Topic,
     pub payload: Buffer<[u8; MQTT_PAYLOAD_MAX_SIZE]>,
@@ -124,7 +129,8 @@ impl  MqttPublish {
 }
 
 
-
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttEvent {
 
     Connected,
@@ -132,10 +138,12 @@ pub enum MqttEvent {
     PublishReceived(MqttPublish),
 
     PublishResult(UniqueID, Result<(), MqttError>),
-    SubscribeResult(UniqueID, Result<(), MqttError>),
+    SubscribeResult(UniqueID, Result<QoS, MqttError>),
     UnsubscribeResult(UniqueID, Result<(), MqttError>)
 }
 
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttRequest {
 
     Publish(MqttPublish, UniqueID),

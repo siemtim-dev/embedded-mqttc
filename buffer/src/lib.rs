@@ -16,6 +16,7 @@ pub mod json;
 
 
 #[derive(Error, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BufferError {
 
     #[error("Error writing to buffer: no remaining capacity")]
@@ -32,6 +33,7 @@ pub enum BufferError {
     JsonDeserialize(serde_json_core::de::Error)
 }
 
+#[derive(Debug)]
 pub struct Buffer<T: AsMut<[u8]> + AsRef<[u8]>> {
     pub(crate) source: T,
     pub(crate) write_position: usize,
@@ -43,6 +45,18 @@ pub fn new_stack_buffer<const N: usize>() -> Buffer<[u8; N]> {
         source: [0; N],
         read_position: 0,
         write_position: 0,
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl <T: AsMut<[u8]> + AsRef<[u8]>> defmt::Format for Buffer<T> {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, 
+            "Buffer(len = {}, cap = {}, rem_cap = {})",
+            self.remaining_len(),
+            self.buf_len(),
+            self.remaining_capacity()
+        );
     }
 }
 

@@ -3,7 +3,7 @@ use core::{cell::RefCell, future::Future};
 use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter};
 use embassy_futures::select::{select, select3};
 use embassy_sync::blocking_mutex::raw::RawMutex;
-use mqttrs::decode_slice_with_len;
+use mqttrs::{decode_slice_with_len, QoS};
 use crate::{network::{Network, NetworkConnection}, state::State, ClientConfig, MqttError, MqttEvent, MqttRequest};
 
 pub trait AsyncSender<T>: Sync {
@@ -75,7 +75,7 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize, C: AsyncSender<MqttEven
         
         let packet_op = decode_slice_with_len(&recv_buffer[..])
             .map_err(|e| {
-                error!("error decoding package: {}", crate::fmt::Debug2Format(&e));
+                error!("error decoding package: {}", e);
                 MqttError::CodecError
             })?;
         
@@ -125,13 +125,19 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize, C: AsyncSender<MqttEven
     async fn work_request_receive(&self) -> Result<!, MqttError> {
         loop {
             let req = self.request_receiver.receive().await;
+            let pid = self.state.pid_source.next_pid();
 
             match req {
                 MqttRequest::Publish(mqtt_publish, id) => {
-                    self.state.publishes.push_publish(mqtt_publish, id).await;
+                    self.state.publishes.push_publish(mqtt_publish, id, pid).await;
                 },
-                MqttRequest::Subscribe(topic, unique_id) => todo!(),
-                MqttRequest::Unsubscribe(topic, unique_id) => todo!(),
+                MqttRequest::Subscribe(topic, unique_id) => {
+                    const SUBSCRIBE_QOS: QoS = QoS::AtMostOnce;
+                    self.state.subscribes.push_subscribe(topic, pid, unique_id, SUBSCRIBE_QOS).await;
+                },
+                MqttRequest::Unsubscribe(topic, unique_id) => {
+                    self.state.subscribes.push_unsubscribe(topic, pid, unique_id).await;
+                },
             }
 
             // Signal that a new request is added

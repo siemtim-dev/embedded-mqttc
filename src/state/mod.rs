@@ -7,17 +7,20 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Instant, Timer};
 use mqttrs::{encode_slice, Connack, Connect, Error, Packet, Protocol, Publish, QosPid};
+use pid::PidSource;
 use ping::PingState;
 use publish::PublishQueue;
+use sub::SubQueue;
 
 use crate::io::AsyncSender;
 use crate::{ClientConfig, MqttError, MqttEvent, MqttPublish};
-use crate::fmt::Debug2Format;
 
 pub(crate) const KEEP_ALIVE: usize = 60;
 
 pub(crate) mod ping;
 pub(crate) mod publish;
+pub(crate) mod sub;
+pub(crate) mod pid;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConnectionState {
@@ -40,10 +43,13 @@ pub(crate) struct State<M: RawMutex> {
     ping: blocking_mutex::Mutex<M, RefCell<PingState>>,
 
     pub(crate) publishes: PublishQueue,
+    pub(crate) subscribes: SubQueue,
 
     // Signal is sent, when a request is added
     // TODO update to emassy_sync::watch::Watch is update is there
-    pub(crate) on_requst_added: Signal<M, usize>
+    pub(crate) on_requst_added: Signal<M, usize>,
+
+    pub(crate) pid_source: PidSource
 
 }
 
@@ -56,8 +62,11 @@ impl <M: RawMutex> State<M> {
             ping: blocking_mutex::Mutex::new(RefCell::new(PingState::PingSuccess(Instant::now()))),
 
             publishes: PublishQueue::new(),
+            subscribes: SubQueue::new(),
 
-            on_requst_added: Signal::new()
+            on_requst_added: Signal::new(),
+
+            pid_source: PidSource::new()
         }
     }
 
@@ -113,7 +122,7 @@ impl <M: RawMutex> State<M> {
                 Ok(false)
             },
             Err(e) => {
-                error!("error encoding {} package: {}", packet.get_type(), Debug2Format(&e));
+                error!("error encoding {} package: {}", packet.get_type(), e);
                 Err(MqttError::CodecError)
             }
         }
@@ -160,7 +169,7 @@ impl <M: RawMutex> State<M> {
     fn process_pingresp(&self) {
         debug!("received pingresp from broker");
         self.ping.lock(|inner|{
-            inner.borrow_mut().on_ping_response();
+            inner.borrow_mut().on_ping_response(&Instant::now());
         });
     }
 
@@ -185,22 +194,26 @@ impl <M: RawMutex> State<M> {
 
         let is_critical = self.ping.lock(|inner|{
             let mut inner = inner.borrow_mut();
+            let now = Instant::now();
 
-            if inner.should_send_ping() {
+            if inner.should_send_ping(&now) {
                 let ping = Packet::Pingreq;
                 let sent = Self::encode_packet(&ping, send_buffer)?;
                 if sent {
-                    inner.ping_sent();
+                    inner.ping_sent(&now);
                 }
             }
     
-            Ok(inner.is_critical_delay())
+            Ok(inner.is_critical_delay(&now))
         })?;
 
         // Do not do anything else if the ping delay is critical (near keepalive)
         if is_critical {
             return Ok(());
         }
+
+        // Subscribe & unsubscribe
+        self.subscribes.process(send_buffer)?;
 
         // Publish and republish packets
         self.publishes.process(send_buffer, control_sender).await?;
@@ -253,9 +266,15 @@ impl <M: RawMutex> State<M> {
                 Ok(result)
             },
 
-            Packet::Suback(suback) => todo!(),
+            Packet::Suback(suback) => {
+                let result = self.subscribes.process_suback(suback);
+                Ok(result)
+            },
             
-            Packet::Unsuback(pid) => todo!(),
+            Packet::Unsuback(pid) => {
+                let result = self.subscribes.process_unsuback(pid);
+                Ok(result)
+            },
             
             Packet::Pingresp => {
                 self.process_pingresp();
@@ -279,7 +298,7 @@ impl <M: RawMutex> State<M> {
     }
 
     pub(crate) async fn on_ping_required(&self) {
-        match self.ping.lock(|p| p.borrow().ping_pause()) {
+        match self.ping.lock(|p| p.borrow().ping_pause(&Instant::now())) {
             Some(pause) => Timer::after(pause).await,
             None => {},
         }

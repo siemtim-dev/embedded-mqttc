@@ -39,6 +39,8 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
         PushFuture::new(self, item)
     }
 
+    /// Remove all elements from the queue which satisfy the remove_where function.
+    /// Every call to next on the returned iterator removes one element and returns it if present
     pub fn remove<'a, F: FnMut(&T) -> bool>(&'a self, remove_where: F) -> RemoveIterator<'a, R, T, F, N> {
         RemoveIterator{
             q: self,

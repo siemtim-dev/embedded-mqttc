@@ -11,7 +11,7 @@ serde-json-core = { version = "0.6.0", default-features = false, features = ["de
 thiserror = { workspace = true, default-features = false }
 
 [features]
-default = [ "embedded", "std", "serde" ]
+default = [ "embedded", "std", "serde", "defmt" ]
 std = []
 serde = [
     "dep:serde",
