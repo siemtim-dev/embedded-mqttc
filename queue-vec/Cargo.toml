@@ -3,6 +3,10 @@ name = "queue-vec"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+
+std = [ "embassy-sync/std" ]
+
 [dependencies]
 embassy-sync = "^0.6.0"
 heapless = "0.*"

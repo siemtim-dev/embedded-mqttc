@@ -1,12 +1,12 @@
 
 use buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 use heapless::{String, Vec};
 use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
 use queue_vec::QueuedVec;
 
-use crate::{MqttError, MqttEvent, Topic, UniqueID};
+use crate::{time, MqttError, MqttEvent, Topic, UniqueID};
 
 const RESUBSCRIBE_DURATION: Duration = Duration::from_secs(5);
 const MAX_CONCURRENT_REQUESTS: usize = 4;
@@ -82,7 +82,7 @@ impl Request {
     fn on_send_success(&mut self) {  
         match self.state {
              RequestState::Initial => {
-                self.state = RequestState::AwaitAck(Instant::now());
+                self.state = RequestState::AwaitAck(time::now());
              },
              _ => {}
          }
@@ -169,7 +169,7 @@ impl SubQueue {
                 // TODO answer quetsion:
                 //   Should the loop `break;` if a publish cannot be written to buffer 
                 //   beause of insufficient space?
-                if request.state.should_publish(Instant::now()) {
+                if request.state.should_publish(time::now()) {
                     request.send(send_buffer)?;
                 }
             }

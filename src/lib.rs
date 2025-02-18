@@ -4,11 +4,26 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{ops::Deref, sync::atomic::{AtomicU64, Ordering}};
-
-use buffer::{new_stack_buffer, Buffer};
 use heapless::String;
-use mqttrs::{Pid, Publish, QoS, QosPid};
 use thiserror::Error;
+
+pub use buffer::*;
+
+use mqttrs::{Pid, Publish, QosPid};
+pub use mqttrs::QoS;
+
+// This must come first so the macros are visible
+pub(crate) mod fmt;
+
+pub mod network;
+
+pub mod io;
+pub(crate) mod state;
+pub(crate) mod time;
+pub mod client;
+
+pub(crate) mod misc;
+
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -29,17 +44,7 @@ impl Deref for UniqueID {
     }
 }
 
-
-// This must come first so the macros are visible
-pub(crate) mod fmt;
-
-pub mod network;
-
-pub mod io;
-
-mod state;
-
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttError {
 
@@ -59,14 +64,19 @@ pub enum MqttError {
     ReceivedMessageTooLong,
 
     #[error("The suback / unsuback packet arrived with an error code")]
-    SubscribeOrUnsubscribeFailed
+    SubscribeOrUnsubscribeFailed,
+
+    #[error("Some internal error occured")]
+    InternalError
 }
 
+#[derive(Clone)]
 pub struct ClientCredentials {
     pub username: String<32>,
     pub password: String<32>,
 }
 
+#[derive(Clone)]
 pub struct ClientConfig {
     pub client_id: String<32>,
     pub credentials: Option<ClientCredentials>
@@ -77,13 +87,29 @@ pub const MQTT_PAYLOAD_MAX_SIZE: usize = 64;
 
 pub type Topic = heapless::String<MAX_TOPIC_SIZE>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MqttPublish {
     pub topic: Topic,
     pub payload: Buffer<[u8; MQTT_PAYLOAD_MAX_SIZE]>,
     pub qos: QoS,
     pub retain: bool,
+}
+
+impl MqttPublish {
+
+    pub fn new(topic: &str, payload: &[u8], qos: QoS, retain: bool) -> Self {
+        let mut s = Self {
+            topic: Topic::new(),
+            payload: new_stack_buffer(),
+            qos, retain
+        };
+        s.topic.push_str(topic).unwrap();
+        s.payload.push(payload).unwrap();
+
+        s
+    }
+
 }
 
 impl <'a> TryFrom<&Publish<'a>> for MqttPublish {
@@ -129,22 +155,22 @@ impl  MqttPublish {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttEvent {
 
     Connected,
-
-    PublishReceived(MqttPublish),
 
     PublishResult(UniqueID, Result<(), MqttError>),
     SubscribeResult(UniqueID, Result<QoS, MqttError>),
     UnsubscribeResult(UniqueID, Result<(), MqttError>)
 }
 
+
+
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum MqttRequest {
+enum MqttRequest {
 
     Publish(MqttPublish, UniqueID),
 

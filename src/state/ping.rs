@@ -1,6 +1,5 @@
-use embassy_time::Duration;
 
-use embassy_time::Instant;
+use crate::time::{ Instant, Duration };
 
 use super::KEEP_ALIVE;
 
@@ -81,7 +80,7 @@ impl PingState {
 
 #[cfg(test)]
 mod tests {
-    use embassy_time::{Duration, Instant};
+    use crate::time::{self, Duration};
 
     use crate::state::KEEP_ALIVE;
 
@@ -90,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_should_send_ping_after_success() {
-        let start = Instant::from_secs(1000);
+        let start = time::now();
         let ping_state = PingState::PingSuccess(start.clone());
 
         let a_bit_later = start + Duration::from_secs((KEEP_ALIVE / 2 - 3) as u64);
@@ -107,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_sould_send_ping_waiting() {
-        let start = Instant::from_secs(1000);
+        let start = time::now();
         let ping_state = PingState::AwaitingResponse { 
             last_success: start - Duration::from_secs((KEEP_ALIVE / 2 + 4) as u64), 
             ping_request_sent: start
@@ -127,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_on_ping_sent () {
-        let start = Instant::from_secs(1000);
+        let start = time::now();
         let mut ping_state = PingState::PingSuccess(start.clone());
 
         let ping_sent = start + Duration::from_secs(20);
@@ -138,5 +137,7 @@ mod tests {
             ping_request_sent: ping_sent 
         });
     }
+
+    //TODO test ping pause
 
 }

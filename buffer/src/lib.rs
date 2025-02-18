@@ -70,6 +70,11 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.read_position = 0;
+        self.write_position = 0;
+    }
+
     /// Returns the length of the undelying buffer
     pub fn buf_len(&self) -> usize {
         self.source.as_ref().len()
@@ -107,7 +112,6 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         self.read_position = 0;
     }
 
-    /// 
     pub fn ensure_remaining_capacity(&mut self) -> bool {
         if ! self.has_remaining_capacity() {
             self.shift();
@@ -295,6 +299,16 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> embedded_io::Read for Buffer<T> {
             Err(_) => {
                 panic!("unexpected error reading from buffer");
             }
+        }
+    }
+}
+
+impl <const N: usize> Clone for Buffer<[u8; N]> {
+    fn clone(&self) -> Self {
+        Self { 
+            source: self.source.clone(), 
+            write_position: self.write_position.clone(), 
+            read_position: self.read_position.clone() 
         }
     }
 }

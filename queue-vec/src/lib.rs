@@ -1,5 +1,5 @@
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use core::cell::RefCell;
 use core::future::Future;
@@ -37,6 +37,16 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
 
     pub fn push<'a>(&'a self, item: T) -> PushFuture<'a, R, T, N> {
         PushFuture::new(self, item)
+    }
+
+    pub fn retain<F>(&self, f: F) where F: FnMut(&T) -> bool{
+        self.inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            inner.data.retain(f);
+            if ! inner.data.is_full() {
+                inner.wakers.wake();
+            }
+        })
     }
 
     /// Remove all elements from the queue which satisfy the remove_where function.
