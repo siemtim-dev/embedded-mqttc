@@ -210,6 +210,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-mqtt"
+version = "0.1.0"
+dependencies = [
+ "buffer",
+ "defmt",
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-io-async",
+ "heapless",
+ "mqttrs",
+ "queue-vec",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+]
+
+[[package]]
 name = "embassy-sync"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -595,24 +613,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e4dccaaaf89514f546c693ddc140f729f958c247918a13380cccc6078391acc"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "remqtt"
-version = "0.1.0"
-dependencies = [
- "buffer",
- "defmt",
- "embassy-futures",
- "embassy-sync",
- "embassy-time",
- "embedded-io-async",
- "heapless",
- "mqttrs",
- "queue-vec",
- "thiserror",
- "tokio",
- "tokio-test",
 ]
 
 [[package]]
