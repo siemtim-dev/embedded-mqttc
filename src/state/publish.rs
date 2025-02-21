@@ -302,8 +302,6 @@ impl PublishQueue {
 mod tests {
     extern crate std;
 
-    use std::time::Instant;
-
     use buffer::{new_stack_buffer, Buffer, BufferReader};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use mqttrs::{decode_slice_with_len, Packet, Pid, Publish, QoS};
@@ -406,7 +404,7 @@ mod tests {
         let mut test = Test::<1024>::new();
 
         // Set time to be mocked
-        time::test_time::set_time(Instant::now());
+        time::test_time::set_static_now();
 
         const RETAIN: bool = false;
         const QOS: QoS = QoS::AtLeastOnce;

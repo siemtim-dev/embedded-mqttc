@@ -1,5 +1,5 @@
 
-use crate::time::{ Instant, Duration };
+use crate::time::{ self, Duration, Instant };
 
 use super::KEEP_ALIVE;
 
@@ -55,19 +55,23 @@ impl PingState {
     }
 
     /// Returns the duration until the next 
-    pub(crate) fn ping_pause(&self, now: &Instant) -> Option<Duration> {
+    pub(crate) fn ping_pause(&self) -> Option<Duration> {
+        let now = time::now();
         match self {
             PingState::PingSuccess(instant) => {
-                let diff = *now - *instant;
+                let diff = now - *instant;
                 let half_keep_alive = KEEP_ALIVE_DURATION / 2;
                 if diff > half_keep_alive {
+                    debug!("send ping now!");
                     None
                 } else {
-                    Some(half_keep_alive - diff)
+                    let d = half_keep_alive - diff;
+                    debug!("send ping in {}", d);
+                    Some(d)
                 }
             },
             PingState::AwaitingResponse { last_success: _, ping_request_sent } => {
-                let diff = *now - *ping_request_sent;
+                let diff = now - *ping_request_sent;
                 if diff > PING_RETRY_DURATION {
                     None
                 } else {
@@ -89,6 +93,8 @@ mod tests {
 
     #[test]
     fn test_should_send_ping_after_success() {
+        time::test_time::set_default();
+
         let start = time::now();
         let ping_state = PingState::PingSuccess(start.clone());
 
@@ -106,6 +112,8 @@ mod tests {
 
     #[test]
     fn test_sould_send_ping_waiting() {
+        time::test_time::set_default();
+
         let start = time::now();
         let ping_state = PingState::AwaitingResponse { 
             last_success: start - Duration::from_secs((KEEP_ALIVE / 2 + 4) as u64), 
@@ -126,7 +134,9 @@ mod tests {
 
     #[test]
     fn test_on_ping_sent () {
+        time::test_time::set_default();
         let start = time::now();
+        
         let mut ping_state = PingState::PingSuccess(start.clone());
 
         let ping_sent = start + Duration::from_secs(20);

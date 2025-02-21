@@ -255,9 +255,14 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
 
 #[cfg(test)]
 mod test {
+    use crate::misc::MqttPacketReader;
+    use crate::state::KEEP_ALIVE;
+    use crate::time::Duration;
+
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use heapless::String;
     use mqttrs::{Connack, ConnectReturnCode, Packet, PacketType, QoS, Suback, SubscribeReturnCodes};
+    use crate::time;
 
     use crate::{network::fake::{self, ConnectionRessources, ReadAtomic, WriteMqttPacket}, ClientConfig};
 
@@ -284,6 +289,8 @@ mod test {
 
     #[tokio::test]
     async fn test_run() {
+        time::test_time::set_default();
+
         let mut config = ClientConfig{
             client_id: String::new(),
             credentials: None
@@ -342,4 +349,60 @@ mod test {
         }
     }
 
+    #[tokio::test]
+    async fn test_idle_connection() {
+        let config = ClientConfig{
+            client_id: String::new(),
+            credentials: None
+        };
+
+        time::test_time::set_static_now();
+
+        let connection_resources = ConnectionRessources::<1024>::new();
+        let (client, server) = fake::new_connection(&connection_resources);
+
+        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(client, config);
+
+        let runner_future = async {
+            event_loop.run().await.unwrap();
+        };
+            
+        let server_future = async {
+
+            let connect = server.read_mqtt_packet(|p| p.get_type()).await.unwrap();
+            assert_eq!(connect, PacketType::Connect);
+
+            server.write_mqtt_packet(&Packet::Connack(Connack{
+                session_present: false,
+                code: ConnectReturnCode::Accepted
+            })).await.unwrap();
+
+            time::test_time::advance_time(Duration::from_secs(2));
+            tokio::time::sleep(core::time::Duration::from_millis(100)).await;
+
+            let pingreq = server.with_reader(|reader| reader.read_packet().unwrap().map(|p| p.get_type()));
+            assert_eq!(pingreq, None);
+
+            time::test_time::advance_time(Duration::from_secs(KEEP_ALIVE as u64) / 2);
+            tokio::time::sleep(core::time::Duration::from_millis(100)).await;
+
+            let pingreq = server.with_reader(|reader| reader.read_packet().unwrap().map(|p| p.get_type()));
+            assert_eq!(pingreq, Some(PacketType::Pingreq));
+
+            server.write_mqtt_packet(&Packet::Pingresp).await.unwrap();
+
+            time::test_time::advance_time(Duration::from_secs(2));
+            tokio::time::sleep(core::time::Duration::from_millis(100)).await;
+
+            let pingreq = server.with_reader(|reader| reader.read_packet().unwrap().map(|p| p.get_type()));
+            assert_eq!(pingreq, None);
+        };
+
+        tokio::select! {
+            _ = runner_future => {},
+            _ = server_future => {}
+        }
+    }
+
 }
+

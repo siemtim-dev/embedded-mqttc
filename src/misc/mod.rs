@@ -1,7 +1,7 @@
 
 
-use buffer::BufferWriter;
-use mqttrs::{encode_slice, Packet};
+use buffer::{BufferReader, BufferWriter};
+use mqttrs::{decode_slice_with_len, encode_slice, Packet};
 
 use crate::MqttError;
 
@@ -41,5 +41,28 @@ impl <T> MqttPacketWriter for T where T: BufferWriter {
             .expect("unexpected error result: commiting more bytes than written");
 
         Ok(())
+    }
+}
+
+
+pub trait MqttPacketReader {
+
+    fn read_packet<'a>(&'a self) -> Result<Option<Packet<'a>>, MqttError>; 
+
+}
+
+impl <T> MqttPacketReader for T where T: BufferReader + ?Sized {
+    
+    
+    fn read_packet<'a>(&'a self) -> Result<Option<Packet<'a>>, MqttError> {
+        let result = decode_slice_with_len(self)
+            .map_err(|_| MqttError::CodecError)?;
+
+        if let Some((n, packet)) = result {
+            self.add_bytes_read(n);
+            Ok(Some(packet))
+        } else {
+            Ok(None)
+        }
     }
 }

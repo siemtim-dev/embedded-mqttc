@@ -291,7 +291,7 @@ impl <M: RawMutex> State<M> {
     }
 
     pub(crate) async fn on_ping_required(&self) {
-        match self.ping.lock(|p| p.borrow().ping_pause(&time::now())) {
+        match self.ping.lock(|p| p.borrow().ping_pause()) {
             Some(pause) => time::sleep(pause).await,
             None => {},
         }
@@ -310,7 +310,7 @@ mod tests {
     use heapless::String;
     use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet};
 
-    use crate::{io::AsyncSender, state::{ConnectionState, State}, time, ClientConfig, MqttError, MqttEvent};
+    use crate::{io::AsyncSender, state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
 
     use super::ping::PingState;
 
@@ -364,9 +364,51 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_on_ping_required() {
+        time::test_time::set_static_now();
+
+        let mut config = ClientConfig{
+            client_id: String::new(),
+            credentials: None
+        };
+
+        config.client_id.push_str("1234567890").unwrap();
+
+        let mut test = Test::new(config);
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+
+        let ping_required = test.state.on_ping_required();
+        tokio::pin!(ping_required);
+
+        let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
+        tokio::pin!(wait);
+
+        tokio::select! {
+            _ = &mut ping_required => {
+                panic!("ping is not required yet!");
+            },
+            _ = wait => {}
+        }
+
+        let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
+        tokio::pin!(wait);
+
+        time::test_time::advance_time(Duration::from_secs(KEEP_ALIVE as u64) / 2 + Duration::from_secs(1));
+
+        tokio::select! {
+            _ = &mut ping_required => {},
+            _ = wait => {
+                panic!("ping must be now required")
+            }
+        }
+    }
+
 
     #[tokio::test]
     async fn test_connect_and_connack() {
+        time::test_time::set_default();
 
         let mut config = ClientConfig{
             client_id: String::new(),

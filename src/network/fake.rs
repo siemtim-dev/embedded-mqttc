@@ -3,8 +3,8 @@ use core::{cell::RefCell, cmp::min, future::Future, pin::Pin, task::{Context, Po
 use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter};
 use embassy_sync::{blocking_mutex::{raw::CriticalSectionRawMutex, Mutex}, waitqueue::WakerRegistration};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
-use mqttrs::{decode_slice_with_len, encode_slice, Packet};
-use crate::{network::{NetworkConnection, TryRead, TryWrite}, MqttError};
+use mqttrs::{encode_slice, Packet};
+use crate::{network::{NetworkConnection, TryRead, TryWrite}, MqttError, misc::MqttPacketReader};
 
 pub struct BufferedStream<const N: usize> {
     inner: Mutex<CriticalSectionRawMutex, RefCell<BufferedStreamInner<N>>>
@@ -40,6 +40,14 @@ impl <const N: usize> BufferedStream<N> {
     pub fn try_write_sync(&self, buf: &[u8]) -> Result<usize, ErrorKind> {
         self.inner.lock(|inner| {
             inner.borrow_mut().try_write_sync(buf)
+        })
+    }
+
+    pub fn with_reader<F, R>(&self, f: F) -> R where F: FnOnce(&dyn BufferReader) -> R {
+        self.inner.lock(|inner|{
+            let mut inner = inner.borrow_mut();
+            let reader = inner.buffer.create_reader();
+            f(&reader)
         })
     }
 }
@@ -272,6 +280,12 @@ pub struct ServerConnection<'a, const N: usize> {
     in_stream: &'a BufferedStream<N>
 }
 
+impl <'a, const N: usize> ServerConnection <'a, N>{
+    pub fn with_reader<F, R>(&self, f: F) -> R where F: FnOnce(&dyn BufferReader) -> R {
+        self.in_stream.with_reader(f)
+    }
+}
+
 impl <'a, const N: usize> ErrorType for ServerConnection<'a, N>  {
     type Error = ErrorKind;
 }
@@ -410,12 +424,10 @@ pub trait ReadAtomic: ErrorType {
         where O: Fn(&Packet<'_>) -> R {
         async move {
             self.read_atomic(|reader|{
-                let result = decode_slice_with_len(&reader)
-                    .map_err(|_| MqttError::CodecError)?;
+                let packet = reader.read_packet()?;
 
-                if let Some((n, p)) = result {
-                    reader.add_bytes_read(n);
-                    let result = o(&p);
+                if let Some(packet) = packet {
+                    let result = o(&packet);
                     Ok(Some(result))
 
                 } else {
@@ -485,11 +497,12 @@ mod connection_tests {
 
     use crate::network::fake::{new_connection, ConnectionRessources};
 
+    use crate::time;
+    use crate::time::Duration;
+
     #[tokio::test]
     async fn test_connection() {
-
-        use crate::time;
-        use crate::time::Duration;
+        time::test_time::set_default();
 
         let resources = ConnectionRessources::<4>::new();
 
