@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-
 std = [ "embassy-sync/std" ]
 
 [dependencies]

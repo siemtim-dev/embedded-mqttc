@@ -16,14 +16,14 @@ thiserror = { version = "2.0.11", default-features = false }
 [dependencies]
 ## From Workspace
 buffer = { version = "*", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
-queue-vec = { version = "*", path = "./queue-vec"}
+queue-vec = { version = "*", default-features = false, path = "./queue-vec"}
 
 ## Other
 embedded-io-async = "0.6.1"
 defmt = { version = "0.3.10", optional = true }
 heapless = "0.8.0"
 embassy-time = { version = "^0.4.0", default-features = false, optional = true }
-embassy-futures = { version = "^0.1.1", default-features = false}
+embassy-futures = { version = "^0.1.1", default-features = false }
 thiserror = { workspace = true, default-features = false }
 tracing = { version = "0.1.41", optional = true }
 
@@ -34,8 +34,9 @@ default-features = false
 [dependencies.mqttrs]
 version = "0.4"
 git = "https://github.com/00imvj00/mqttrs.git"
-rev = "0f1ce9d1afa564392dc87ed1ec9801bcb457a579"
+rev = "dd9d381b401b1b7353c43b36123f1b2ea5fa80a1"
 default-features = false
+features = ["defmt"]
 
 [dependencies.tokio]
 version = "1.43.0"

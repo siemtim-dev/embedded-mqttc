@@ -6,12 +6,13 @@ use mqttrs::{decode_slice_with_len, encode_slice, Packet};
 use crate::MqttError;
 
 #[derive(Debug, thiserror::Error, PartialEq, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WritePacketError {
     
-    #[error("")]
+    #[error("not enaugh space to write packet")]
     NotEnaughSpace,
 
-    #[error("")]
+    #[error("otehr error")]
     Other(#[from] MqttError)
 
 }

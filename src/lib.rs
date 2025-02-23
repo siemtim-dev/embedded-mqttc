@@ -3,7 +3,9 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::{ops::Deref, sync::atomic::{AtomicU64, Ordering}};
+use core::{cell::Cell, ops::Deref};
+
+use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use heapless::String;
 use thiserror::Error;
 
@@ -25,14 +27,19 @@ pub mod client;
 pub(crate) mod misc;
 
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
+static COUNTER: Mutex<CriticalSectionRawMutex, Cell<u64>> = Mutex::new(Cell::new(0));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct UniqueID(u64);
 
 impl UniqueID {
     pub fn new() -> Self {
-        Self(COUNTER.fetch_add(1, Ordering::SeqCst))
+        Self(COUNTER.lock(|inner|{
+            let value = inner.get();
+            inner.set(value + 1);
+            value
+        }))
     }
 }
 
