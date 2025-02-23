@@ -172,6 +172,8 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
             // Try to read a package from the receive buffer and write answers (e. g. acknoledgements) 
             // to the send buffer
             self.try_package_receive(&mut send_buffer_writer, recv_reader).await?;
+
+            trace!("after try packege_receive: recv_buffer: {} / {}", recv_buffer.remaining_len(), recv_buffer.remaining_capacity());
         }
     }
 

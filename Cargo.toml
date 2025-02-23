@@ -56,7 +56,6 @@ embassy-time = { version = "^0.4.0", default-features = false, features = ["std"
 embassy-sync = { version = "0.6.2", default-features = false, features = ["std"]}
 
 tokio = { version = "1.43.0", features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
-tokio-test = "0.4.4"
 dotenv = "0.15.0"
 tracing = { version = "0.1.41" }
 test-log = { version = "0.2.17", default-features = false, features = ["trace", "color"] }
