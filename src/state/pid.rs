@@ -19,7 +19,6 @@ impl PidSource {
     /// Genrates the next unique pid for the packet
     ///
     pub(crate) fn next_pid(&self) -> Pid {
-        warn!("this method may generate non unique PIDs");
         self.counter.lock(|pid|{
             let mut pid = pid.borrow_mut();
 

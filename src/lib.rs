@@ -73,7 +73,7 @@ pub enum MqttError {
 #[derive(Clone)]
 pub struct ClientCredentials {
     pub username: String<32>,
-    pub password: String<32>,
+    pub password: String<128>,
 }
 
 impl ClientCredentials {
@@ -161,7 +161,7 @@ impl <'a> TryFrom<&Publish<'a>> for MqttPublish {
 }
 
 impl  MqttPublish {
-    pub fn create_publish<'a>(&'a self, pid: Pid, dup: bool) -> Publish<'a> {
+    pub(crate) fn create_publish<'a>(&'a self, pid: Pid, dup: bool) -> Publish<'a> {
         let qospid = match self.qos {
             QoS::AtMostOnce => QosPid::AtMostOnce,
             QoS::AtLeastOnce => QosPid::AtLeastOnce(pid),

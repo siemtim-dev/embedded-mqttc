@@ -142,10 +142,13 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
         loop {
             // Try to send packets first before blocking for network traffic
             // Send packets (Ping, Connect, Publish)
-            {
+            {   
                 let mut send_buffer = self.send_buffer.borrow_mut();
                 let mut send_buffer_writer = send_buffer.create_writer();
                 self.state.send_packets(&mut send_buffer_writer, &self.control_sender)?;
+                drop(send_buffer_writer);
+                trace!("after network send: send_buffer {} / {}", send_buffer.remaining_len(), send_buffer.remaining_capacity());
+
             }
             
             // Send / Receive Network traffic
@@ -161,9 +164,9 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
                 embassy_futures::select::Either3::Third(_) => Ok(()),
             }?;
 
+            let mut send_buffer = self.send_buffer.borrow_mut();
             let mut recv_buffer = self.recv_buffer.borrow_mut();
             let recv_reader = recv_buffer.create_reader();
-            let mut send_buffer = self.send_buffer.borrow_mut();
             let mut send_buffer_writer = send_buffer.create_writer();
 
             // Try to read a package from the receive buffer and write answers (e. g. acknoledgements) 
@@ -180,13 +183,16 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
             match req {
                 MqttRequest::Publish(mqtt_publish, id) => {
                     self.state.publishes.push_publish(mqtt_publish, id, pid).await;
+                    debug!("new publish request added to queue");
                 },
                 MqttRequest::Subscribe(topic, unique_id) => {
                     const SUBSCRIBE_QOS: QoS = QoS::AtMostOnce;
                     self.state.subscribes.push_subscribe(topic, pid, unique_id, SUBSCRIBE_QOS).await;
+                    debug!("new subscribe request added to queue");
                 },
                 MqttRequest::Unsubscribe(topic, unique_id) => {
                     self.state.subscribes.push_unsubscribe(topic, pid, unique_id).await;
+                    debug!("new unsubscribe request added to queue");
                 },
             }
 
@@ -206,6 +212,7 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
                 warn!("{}. try to connecto to host failed", tries);
                 time::sleep(Duration::from_secs(3)).await;
             } else {
+                info!("connect to broker success");
                 return Ok(())
             }
             

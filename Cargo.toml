@@ -25,6 +25,7 @@ heapless = "0.8.0"
 embassy-time = { version = "^0.4.0", default-features = false, optional = true }
 embassy-futures = { version = "^0.1.1", default-features = false}
 thiserror = { workspace = true, default-features = false }
+tracing = { version = "0.1.41", optional = true }
 
 [dependencies.embassy-sync]
 version = "0.6.2"
@@ -46,6 +47,7 @@ default = [ "std" ]
 embassy = [ "dep:embassy-time" ]
 std = [ "embassy-sync/std", "queue-vec/std", "dep:tokio" ]
 defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "buffer/defmt"]
+tracing = [ "std", "dep:tracing" ]
 test_with_broker = [ "std" ]
 
 [dev-dependencies]
@@ -55,5 +57,9 @@ embassy-sync = { version = "0.6.2", default-features = false, features = ["std"]
 
 tokio = { version = "1.43.0", features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
 tokio-test = "0.4.4"
+dotenv = "0.15.0"
+tracing = { version = "0.1.41" }
+test-log = { version = "0.2.17", default-features = false, features = ["trace", "color"] }
+ntest = "0.9.3"
 
 
