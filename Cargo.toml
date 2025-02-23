@@ -46,6 +46,7 @@ default = [ "std" ]
 embassy = [ "dep:embassy-time" ]
 std = [ "embassy-sync/std", "queue-vec/std", "dep:tokio" ]
 defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "buffer/defmt"]
+test_with_broker = [ "std" ]
 
 [dev-dependencies]
 

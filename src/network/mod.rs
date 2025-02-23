@@ -5,8 +5,8 @@ use embedded_io_async::{ErrorType, Read, ReadReady, Write, WriteReady};
 
 use crate::MqttError;
 
-#[cfg(test)]
-pub mod test;
+#[cfg(feature = "std")]
+pub mod std;
 
 pub mod fake;
 
@@ -41,7 +41,7 @@ impl <T> TryWrite for T where T: Write + WriteReady{
 pub trait NetworkConnection: Read + Write + TryWrite + TryRead {
 
     /// Used to establish a connection and reconnect after a connection fail
-    fn connect(&mut self) -> impl Future<Output = Result<(), MqttError>> + Send;
+    fn connect(&mut self) -> impl Future<Output = Result<(), MqttError>>;
     
 }
 

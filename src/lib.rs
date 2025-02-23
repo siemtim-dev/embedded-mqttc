@@ -76,10 +76,34 @@ pub struct ClientCredentials {
     pub password: String<32>,
 }
 
+impl ClientCredentials {
+    pub fn new(username: &str, password: &str) -> Self {
+        let mut this = Self {
+            username: String::new(),
+            password: String::new()
+        };
+
+        this.username.push_str(username).unwrap();
+        this.password.push_str(password).unwrap();
+        this
+    }
+}
+
 #[derive(Clone)]
 pub struct ClientConfig {
     pub client_id: String<32>,
     pub credentials: Option<ClientCredentials>
+}
+
+impl ClientConfig {
+    pub fn new(client_id: &str, credentials: Option<ClientCredentials>) -> Self {
+        let mut cid = String::new();
+        cid.push_str(client_id).unwrap();
+        Self {
+            client_id: cid,
+            credentials
+        }
+    }
 }
 
 pub const MAX_TOPIC_SIZE: usize = 64;
