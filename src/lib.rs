@@ -207,7 +207,9 @@ enum MqttRequest {
 
     Subscribe(Topic, UniqueID),
 
-    Unsubscribe(Topic, UniqueID)
+    Unsubscribe(Topic, UniqueID),
+
+    Disconnect,
 
 }
 

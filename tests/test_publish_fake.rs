@@ -1,4 +1,6 @@
 
+use std::pin::Pin;
+
 use embassy_mqtt::network::fake::{new_connection, ConnectionRessources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_io_async::Read;
@@ -9,7 +11,8 @@ use embassy_mqtt::{io::MqttEventLoop, ClientConfig};
 #[tokio::test]
 async fn test_connect() {
     let resources = ConnectionRessources::<256>::new();
-    let (client, mut server) = new_connection(&resources);
+    let (mut client, mut server) = new_connection(&resources);
+    let client = Pin::new(&mut client);
 
     let mut client_id = heapless::String::new();
     client_id.push_str("1234567890").unwrap();
@@ -18,10 +21,10 @@ async fn test_connect() {
         credentials: None
     };
 
-    let event_loop = MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(client, config);
+    let event_loop = MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(config);
 
     let work_future = async {
-        event_loop.run().await.unwrap();
+        event_loop.run(client).await.unwrap();
     };
 
     let _client = event_loop.client();

@@ -323,6 +323,8 @@ impl <'a, const N: usize> ErrorType for ClientConnection<'a, N>  {
     type Error = ErrorKind;
 }
 
+impl <'a, const N: usize> Unpin for ClientConnection<'a, N> {}
+
 impl <'a, const N: usize> Write for ClientConnection<'a, N>  {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         self.out_stream.write_async(buf).await

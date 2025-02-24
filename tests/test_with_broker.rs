@@ -1,4 +1,4 @@
-use std::{env::{self, VarError}, fmt::Debug, str::{from_utf8, FromStr}};
+use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
 
 use embassy_mqtt::{io::MqttEventLoop, network::std::StdNetworkConnection, ClientConfig, ClientCredentials};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -62,25 +62,27 @@ impl BrokerConfig {
 }
 
 #[test(tokio::test)]
+#[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos0() {
     dotenv::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let connection = broker_config.new_connection();
-    let mqtt_config = broker_config.new_client_config("1234567890");
+    let mqtt_config = broker_config.new_client_config("ff9h01238chhz3999hf");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let test_future = async {
-        let topic = "test";
+        let topic = "test-hsduifhds";
         let payload = "test payload".as_bytes();
 
         client.publish(topic, payload, QoS::AtMostOnce, false).await.unwrap();
@@ -95,25 +97,27 @@ async fn test_broker_publish_qos0() {
 }
 
 #[test(tokio::test)]
+#[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos1() {
     dotenv::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let connection = broker_config.new_connection();
     let mqtt_config = broker_config.new_client_config("gzug83gh30ugd");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let test_future = async {
-        let topic = "test";
+        let topic = "test-ashjhkasjhdj";
         let payload = "test payload".as_bytes();
 
         client.publish(topic, payload, QoS::AtLeastOnce, false).await.unwrap();
@@ -128,25 +132,27 @@ async fn test_broker_publish_qos1() {
 }
 
 #[test(tokio::test)]
+#[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos2() {
     dotenv::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let connection = broker_config.new_connection();
     let mqtt_config = broker_config.new_client_config("dhk3a09udgwp2ih");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let test_future = async {
-        let topic = "test";
+        let topic = "test-hsdjkfhsdhf";
         let payload = "test payload".as_bytes();
 
         client.publish(topic, payload, QoS::ExactlyOnce, false).await.unwrap();
@@ -161,74 +167,79 @@ async fn test_broker_publish_qos2() {
 }
 
 #[test(tokio::test)]
+#[ntest::timeout(5000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_subscribe_unsubscribe() {
     dotenv::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let connection = broker_config.new_connection();
-    let mqtt_config = broker_config.new_client_config("jhfvp3330u9efhpw22");
+    let mqtt_config = broker_config.new_client_config("jh330u9887609efhpw22");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let test_future = async {
-        let topic = "test";
+        let topic = "test-jdfoifu98z";
 
         client.subscribe(topic).await.unwrap();
         client.unsubscribe(topic).await.unwrap();
+        client.disconnect().await;
     };
 
-    tokio::select! {
-        _ = client_loop_future => {
-            panic!("client loop must not stop");
-        },
-        _ = test_future => {}
-    }
+    tokio::join!(
+        client_loop_future,
+        test_future,
+    );
+
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(1000)]
+#[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_and_subscribe() {
     dotenv::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let connection = broker_config.new_connection();
     let mqtt_config = broker_config.new_client_config("jhfvp3330u9efhpw22");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_1_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let publish_future = async {
         let topic = "test";
-        let payload = "test_payload".as_bytes();
+        let payload = "test-payload-hjh3".as_bytes();
 
         tokio::time::sleep(core::time::Duration::from_millis(100)).await;
         client.publish(topic, payload, QoS::AtLeastOnce, false).await.unwrap();
+        client.disconnect().await;
     };
 
-    let connection = broker_config.new_connection();
     let mqtt_config = broker_config.new_client_config("jjl43nn29jk");
     let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(connection, mqtt_config);
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
     let client_loop_2_future = async {
-        event_loop.run().await.unwrap()
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
     };
 
     let subscribe_future = async {
@@ -236,22 +247,16 @@ async fn test_broker_publish_and_subscribe() {
         let publish = client.receive().await;
         assert_eq!(&publish.topic, "test");
         let payload = from_utf8(publish.payload.data()).unwrap();
-        assert_eq!(payload, "test_payload");
+        assert_eq!(payload, "test-payload-hjh3");
+        client.disconnect().await;
     };
 
-    let test_future = async {
-        tokio::join!(publish_future, subscribe_future);
-    };
-
-    tokio::select! {
-        _ = client_loop_1_future => {
-            panic!("client loop 1 must not stop");
-        },
-        _ = client_loop_2_future => {
-            panic!("client loop 2 must not stop");
-        },
-        _ = test_future => {}
-    }
+    tokio::join! (
+        client_loop_1_future,
+        client_loop_2_future,
+        publish_future,
+        subscribe_future
+    );
 }
 
 

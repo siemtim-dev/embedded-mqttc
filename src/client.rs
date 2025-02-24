@@ -103,4 +103,8 @@ impl <'a, M: RawMutex> MqttClient<'a, M> {
         self.received_publishes.receive().await
     }
 
+    pub async fn disconnect(&self) {
+        self.request_sender.send(MqttRequest::Disconnect).await;
+    }
+
 }

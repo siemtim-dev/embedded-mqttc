@@ -21,7 +21,8 @@ impl <T: ToSocketAddrs> StdNetworkConnection<T> {
         }
     }
 }
-// Read + Write + WriteReady + ReadReady
+
+impl <T: ToSocketAddrs> Unpin for StdNetworkConnection<T> {}
 
 impl <T: ToSocketAddrs> ErrorType for StdNetworkConnection<T> {
     type Error = embedded_io_async::ErrorKind;
@@ -33,9 +34,22 @@ impl <T: ToSocketAddrs> super::TryRead for StdNetworkConnection<T> {
             .try_read(buf);
 
         match result {
-            Ok(n) => Ok(n),
+            Ok(n) => {
+                if n == 0 && ! buf.is_empty(){
+                    warn!("std net try_read: read 0 bytes");
+                    Err(ErrorKind::ConnectionReset)
+                } else {
+                    Ok(n)
+                }
+            },
             Err(e) => {
-                if e.kind() == tokio::io::ErrorKind::WouldBlock { Ok(0) } else { Err(ErrorKind::Other) }
+                if e.kind() == tokio::io::ErrorKind::WouldBlock {
+                    trace!("try_read: network would block");
+                    Ok(0) 
+                } else { 
+                    error!("error try_reading from std net: {:?}", e);
+                    Err(ErrorKind::Other) 
+                }
             }
         }
     }
@@ -47,9 +61,22 @@ impl <T: ToSocketAddrs> super::TryWrite for StdNetworkConnection<T> {
             .try_write(buf);
 
         match result {
-            Ok(n) => Ok(n),
+            Ok(n) => {
+                if n == 0 && ! buf.is_empty(){
+                    warn!("std net try_write: 0 written bytes");
+                    Err(ErrorKind::ConnectionReset)
+                } else {
+                    Ok(n)
+                }
+            },
             Err(e) => {
-                if e.kind() == tokio::io::ErrorKind::WouldBlock { Ok(0) } else { Err(ErrorKind::Other) }
+                if e.kind() == tokio::io::ErrorKind::WouldBlock {
+                    trace!("try_write: network would block");
+                    Ok(0) 
+                } else { 
+                    error!("error try_writing to std net: {:?}", e);
+                    Err(ErrorKind::Other) 
+                }
             }
         }
     }
@@ -57,17 +84,41 @@ impl <T: ToSocketAddrs> super::TryWrite for StdNetworkConnection<T> {
 
 impl <T: ToSocketAddrs> Read for StdNetworkConnection<T> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.stream.as_mut().ok_or(ErrorKind::Other)?
+        self.stream.as_ref().ok_or(ErrorKind::Other)?.readable().await
+        .map_err(|e| {
+            error!("error waiting for std net to be readable: {:?}", e);
+            ErrorKind::Other
+        })?;
+
+        let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
             .read(buf).await
-            .map_err(|_| ErrorKind::Other)
+            .map_err(|e| {
+                error!("error reading from std net: {:?}", e);
+                ErrorKind::Other
+            })?;
+
+        if n == 0 && ! buf.is_empty(){
+            warn!("std net read: read 0 bytes");
+            return Err(ErrorKind::ConnectionReset);
+        }
+        Ok(n)
     }
 }
 
 impl <T: ToSocketAddrs> Write for StdNetworkConnection<T> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.stream.as_mut().ok_or(ErrorKind::Other)?
+        let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
             .write(buf).await
-            .map_err(|_| ErrorKind::Other)
+            .map_err(|e| {
+                error!("error writing to std net: {:?}", e);
+                ErrorKind::Other
+            })?;
+
+        if n == 0 && ! buf.is_empty(){
+            warn!("std net write: 0 written bytes");
+            return Err(ErrorKind::ConnectionReset);
+        }
+        Ok(n)
     }
 }
 

@@ -45,11 +45,11 @@ pub trait NetworkConnection: Read + Write + TryWrite + TryRead {
     
 }
 
-pub struct Network<C: NetworkConnection>(C);
+pub struct Network<'a, C: NetworkConnection>(&'a mut C);
 
-impl <C: NetworkConnection> Network<C> {
+impl <'a, C: NetworkConnection> Network<'a, C> {
 
-    pub fn new(inner: C) -> Self {
+    pub fn new(inner: &'a mut C) -> Self {
         Self(inner)
     }
 
@@ -57,16 +57,24 @@ impl <C: NetworkConnection> Network<C> {
         self.0.connect().await
     }
 
+    pub async fn send_all(&mut self, buffer: &mut impl BufferReader) -> Result<(), MqttError> {
+        self.0.write_all(buffer)
+            .await.map_err(|e| {
+                error!("error sending to network: {}", e);
+                MqttError::ConnectionFailed
+            })?;
+
+        Ok(())
+    }
+
     /// Send data from the buffer to the network and block is the network is not ready
     pub async fn send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, MqttError> {
-        if ! buf.has_remaining_len() {
-            trace!("no data to send to network");
-            return Ok(0);
-        }
-
         let reader = buf.create_reader();
         let result = self.0.write(&reader[..]).await
-            .map_err(|_| MqttError::ConnectionFailed);
+            .map_err(|e| {
+                error!("error sending to network: {}", e);
+                MqttError::ConnectionFailed
+            });
         match result {
             Ok(n) => {
                 reader.add_bytes_read(n);
@@ -74,21 +82,19 @@ impl <C: NetworkConnection> Network<C> {
                 Ok(0)
             },
             Err(e) => {
-                error!("error writing to network: {}", e);
                 Err(e)
             },
         }
     }
 
     pub async fn try_send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, MqttError> {
-        if ! buf.has_remaining_len() {
-            trace!("no data to send to network");
-            return Ok(0);
-        }
 
         let reader = buf.create_reader();
         let result = self.0.try_write(&reader[..]).await
-            .map_err(|_| MqttError::ConnectionFailed);
+            .map_err(|e| {
+                error!("error try_sending to network: {}", e);
+                MqttError::ConnectionFailed}
+            );
         match result {
             Ok(n) => {
                 reader.add_bytes_read(n);
@@ -96,7 +102,6 @@ impl <C: NetworkConnection> Network<C> {
                 Ok(0)
             },
             Err(e) => {
-                error!("error writing to network: {}", e);
                 Err(e)
             },
         }
@@ -111,7 +116,10 @@ impl <C: NetworkConnection> Network<C> {
         let mut writer = buf.create_writer();
 
         let result = self.0.read(&mut writer).await
-            .map_err(|_| MqttError::ConnectionFailed);
+            .map_err(|e| {
+                error!("error receive from network: {}", e);
+                MqttError::ConnectionFailed
+            });
 
         match result {
             Ok(n) => {
@@ -122,7 +130,6 @@ impl <C: NetworkConnection> Network<C> {
                 Ok(n)
             },
             Err(e) => {
-                error!("error reading from network: {}", e);
                 Err(e)
             },
         }
@@ -137,7 +144,10 @@ impl <C: NetworkConnection> Network<C> {
         let mut writer = buf.create_writer();
 
         let result = self.0.try_read(&mut writer).await
-            .map_err(|_| MqttError::ConnectionFailed);
+            .map_err(|e| {
+                error!("error try_receive from network: {}", e);
+                MqttError::ConnectionFailed
+            });
 
         match result {
             Ok(n) => {
@@ -148,7 +158,6 @@ impl <C: NetworkConnection> Network<C> {
                 Ok(n)
             },
             Err(e) => {
-                error!("error reading from network: {}", e);
                 Err(e)
             },
         }

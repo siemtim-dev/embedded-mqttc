@@ -11,6 +11,12 @@ impl <T: Debug> core::fmt::Display for crate::fmt::Debug2Format<T> {
     }
 }
 
+impl <T: Debug> Debug for Debug2Format<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[collapse_debuginfo(yes)]
 macro_rules! trace {
     ($s:literal $(, $x:expr)* $(,)?) => {

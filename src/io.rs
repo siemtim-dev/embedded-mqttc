@@ -1,10 +1,10 @@
-use core::{cell::RefCell, future::Future};
+use core::{cell::RefCell, future::Future, pin::Pin};
 
 use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter};
 use embassy_futures::select::{select, select3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
-use mqttrs::{decode_slice_with_len, QoS};
-use crate::{client::MqttClient, network::{Network, NetworkConnection}, state::State, time, ClientConfig, MqttError, MqttEvent, MqttPublish, MqttRequest};
+use mqttrs::{decode_slice_with_len, Packet, QoS};
+use crate::{client::MqttClient, misc::{MqttPacketWriter, WritePacketError}, network::{Network, NetworkConnection}, state::State, time, ClientConfig, MqttError, MqttEvent, MqttPublish, MqttRequest};
 
 use crate::time::Duration;
 
@@ -48,11 +48,9 @@ impl <M: RawMutex, T, const N: usize> AsyncReceiver<T> for Channel<M, T, N> {
     }
 }
 
-pub struct MqttEventLoop<M: RawMutex, N: NetworkConnection, const B: usize> {
+pub struct MqttEventLoop<M: RawMutex, const B: usize> {
     recv_buffer: RefCell<Buffer<[u8; B]>>,
     send_buffer: RefCell<Buffer<[u8; B]>>,
-
-    connection: RefCell<Network<N>>,
 
     state: State<M>,
 
@@ -61,14 +59,13 @@ pub struct MqttEventLoop<M: RawMutex, N: NetworkConnection, const B: usize> {
     received_publishes: Channel<M, MqttPublish, 4>
 }
 
-impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> {
+impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
 
-    pub fn new(connection: N, config: ClientConfig) -> Self {
+    pub fn new(config: ClientConfig) -> Self {
         
         Self {
             recv_buffer: RefCell::new(new_stack_buffer::<B>()),
             send_buffer: RefCell::new(new_stack_buffer::<B>()),
-            connection: RefCell::new(Network::new(connection)),
 
             state: State::new(config),
 
@@ -89,12 +86,13 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
     /// Receive / sent bytes from / to the network
     /// Sends blocking if there are bytes to send
     /// Receives blocking if there are no more bytes to send.
-    async fn network_send_receive(&self) -> Result<(), MqttError> {
+    async fn network_send_receive<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
         let mut send_buffer = self.send_buffer.borrow_mut();
-        let mut connection = self.connection.borrow_mut();
+        // let mut connection = self.connection.borrow_mut();
         
         if send_buffer.has_remaining_len() {
-            connection.send(&mut send_buffer).await?;
+            let n = connection.send(&mut send_buffer).await?;
+            trace!("sent {} bytes to network; send_buffer remaining: {}", n, send_buffer.remaining_len());
         } else {
             trace!("send buffer is empty, skipping send");
         }
@@ -102,9 +100,11 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
         let mut recv_buffer = self.recv_buffer.borrow_mut();
         // Do not block for receiving if there is still something to send
         if send_buffer.has_remaining_len() {
-            connection.try_receive(&mut recv_buffer).await?;
+            let n = connection.try_receive(&mut recv_buffer).await?;
+            trace!("try_receive {} bytes from network", n);
         } else {
-            connection.receive(&mut recv_buffer).await?;
+            let n = connection.receive(&mut recv_buffer).await?;
+            trace!("receive {} bytes from network", n);
         }
 
         Ok(())
@@ -138,7 +138,7 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
     /// First tries to write outgoing traffic to buffer
     /// Then tries to read / write to / from the connection
     /// Then read data from receive buffer
-    async fn work_network(&self) -> Result<!, MqttError> {
+    async fn work_network<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<!, MqttError> {
         loop {
             // Try to send packets first before blocking for network traffic
             // Send packets (Ping, Connect, Publish)
@@ -155,7 +155,7 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
             // Interript this when ...
             // - a new Request (e. g. Publish) is added to process it
             // - sending a ping message is required
-            let network_future = self.network_send_receive();
+            let network_future = self.network_send_receive(connection);
             let on_request_signal_future = self.state.on_requst_added.wait();
             let next_ping_future = self.state.on_ping_required();
             match select3(network_future, on_request_signal_future, next_ping_future).await {
@@ -177,24 +177,31 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
         }
     }
 
-    async fn work_request_receive(&self) -> Result<!, MqttError> {
+
+    /// Receive requests from cleint.
+    /// Returns if the client sends a disconnect message
+    async fn work_request_receive(&self) -> Result<(), MqttError> {
         loop {
             let req = self.request_receiver.receive().await;
             let pid = self.state.pid_source.next_pid();
 
             match req {
                 MqttRequest::Publish(mqtt_publish, id) => {
-                    self.state.publishes.push_publish(mqtt_publish, id, pid).await;
-                    debug!("new publish request added to queue");
-                },
+                                self.state.publishes.push_publish(mqtt_publish, id, pid).await;
+                                debug!("new publish request added to queue");
+                            },
                 MqttRequest::Subscribe(topic, unique_id) => {
-                    const SUBSCRIBE_QOS: QoS = QoS::AtMostOnce;
-                    self.state.subscribes.push_subscribe(topic, pid, unique_id, SUBSCRIBE_QOS).await;
-                    debug!("new subscribe request added to queue");
-                },
+                                const SUBSCRIBE_QOS: QoS = QoS::AtMostOnce;
+                                self.state.subscribes.push_subscribe(topic, pid, unique_id, SUBSCRIBE_QOS).await;
+                                debug!("new subscribe request added to queue");
+                            },
                 MqttRequest::Unsubscribe(topic, unique_id) => {
-                    self.state.subscribes.push_unsubscribe(topic, pid, unique_id).await;
-                    debug!("new unsubscribe request added to queue");
+                                self.state.subscribes.push_unsubscribe(topic, pid, unique_id).await;
+                                debug!("new unsubscribe request added to queue");
+                            },
+                MqttRequest::Disconnect => {
+                    self.state.on_requst_added.signal(0);
+                    return Ok(());
                 },
             }
 
@@ -203,12 +210,14 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
         }
     }
 
-    async fn connect(&self) -> Result<(), MqttError> {
+    async fn connect<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+        self.send_buffer.borrow_mut().reset();
+        self.recv_buffer.borrow_mut().reset();
+        
         let mut tries = 0;
-
         while tries < 5 {
 
-            let result = self.connection.borrow_mut().connect().await;
+            let result = connection.connect().await;
             if result.is_err() {
                 tries += 1;
                 warn!("{}. try to connecto to host failed", tries);
@@ -224,13 +233,13 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
         Err(MqttError::ConnectionFailed)
     }
 
-    async fn work(&self) -> Result<!, MqttError> {
+    async fn work<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
         // Reset state on new connection
         self.state.reset();
             
         // Poll both futures
         // Select should never befinished because both jobs are infinite
-        let network_future = self.work_network();
+        let network_future = self.work_network(connection);
         let request_future = self.work_request_receive();
         match select(network_future, request_future).await {
             embassy_futures::select::Either::First(net_result) => {
@@ -239,31 +248,80 @@ impl <M: RawMutex, N: NetworkConnection, const B: usize> MqttEventLoop<M, N, B> 
                 Err(err)
             },
             embassy_futures::select::Either::Second(req_result) => {
-                let err = req_result.unwrap_err();
-                error!("infinite request receive job finished: {}", err);
-                Err(err)
+                if let Err(err) = req_result {
+                    error!("infinite request receive job finished: {}", err);
+                    Err(err)
+                } else {
+                    info!("disconnect request received: stopping jobs");
+                    Ok(())
+                }
             },
         }
     }
 
-    pub async fn run(&self) -> Result<!, MqttError> {
+    async fn disconnect<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+        
+        let mut send_buffer = self.send_buffer.borrow_mut();
+        let mut send_buffer_writer = send_buffer.create_writer();
 
-        self.connect().await?;
+        send_buffer_writer.write_packet(&Packet::Disconnect).map_err(|err| {
+            match err {
+                WritePacketError::NotEnaughSpace => {
+                    warn!("could not write Disconnect to send buffer: full");
+                    MqttError::ConnectionFailed
+                },
+                WritePacketError::Other(mqtt_error) => mqtt_error,
+            }
+        })?;
+        drop(send_buffer_writer);
+
+        let mut send_buffer_reader = send_buffer.create_reader();
+        connection.send_all(&mut send_buffer_reader).await?;
+
+        // Reset send buffer to be ready to 
+        self.recv_buffer.borrow_mut().reset();
+
+        Ok(())
+
+    }
+
+    pub async fn run<N: NetworkConnection>(&self, connection: Pin<&mut N>) -> Result<(), MqttError> {
+
+        let connection = unsafe {
+            connection.get_unchecked_mut()
+        };
+
+        let mut connection = Network::new(connection);
+
+        self.connect(&mut connection).await?;
 
         loop {
-            let err = self.work().await.unwrap_err();
-            if err == MqttError::ConnectionFailed {
-                self.connect().await?;
-            } else {
-                return Err(err);
+            let result = self.work(&mut connection).await;
+            match result {
+                Ok(()) => {
+                    break;
+                }
+                Err(MqttError::ConnectionFailed) => {
+                    warn!("conection faild, reconnect");
+                    self.connect(&mut connection).await?;
+                }
+                Err(err) => {
+                    return Err(err);
+                }
             }
         }
+
+        self.disconnect(&mut connection).await?;
+
+        Ok(())
 
     }
 }
 
 #[cfg(test)]
 mod test {
+    use core::pin::Pin;
+
     use crate::misc::MqttPacketReader;
     use crate::state::KEEP_ALIVE;
     use crate::time::Duration;
@@ -309,13 +367,14 @@ mod test {
 
         let connection_resources = ConnectionRessources::<1024>::new();
 
-        let (client, server) = fake::new_connection(&connection_resources);
+        let (mut client, server) = fake::new_connection(&connection_resources);
 
-        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(client, config);
+        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(config);
         let mqtt_client = event_loop.client();
 
         let runner_future = async {
-            event_loop.run().await.unwrap();
+            let client = Pin::new(&mut client);
+            event_loop.run(client).await.unwrap();
         };
 
         let test_future = async move {
@@ -368,12 +427,13 @@ mod test {
         time::test_time::set_static_now();
 
         let connection_resources = ConnectionRessources::<1024>::new();
-        let (client, server) = fake::new_connection(&connection_resources);
+        let (mut client, server) = fake::new_connection(&connection_resources);
 
-        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, _, 1024>::new(client, config);
+        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(config);
 
         let runner_future = async {
-            event_loop.run().await.unwrap();
+            let client = Pin::new(&mut client);
+            event_loop.run(client).await.unwrap();
         };
             
         let server_future = async {
@@ -411,6 +471,50 @@ mod test {
             _ = runner_future => {},
             _ = server_future => {}
         }
+    }
+
+    #[tokio::test]
+    #[ntest::timeout(1000)]
+    async fn test_disconnect() {
+        let config = ClientConfig{
+            client_id: String::new(),
+            credentials: None
+        };
+
+        let connection_resources = ConnectionRessources::<1024>::new();
+        let (mut client, server) = fake::new_connection(&connection_resources);
+
+        let event_loop = MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(config);
+        let mqtt_client = event_loop.client();
+
+        let runner_future = async {
+            let client = Pin::new(&mut client);
+            event_loop.run(client).await.unwrap();
+        };
+
+        let client_future = async {
+            mqtt_client.disconnect().await;
+        };
+            
+        let server_future = async {
+
+            let connect = server.read_mqtt_packet(|p| p.get_type()).await.unwrap();
+            assert_eq!(connect, PacketType::Connect);
+
+            server.write_mqtt_packet(&Packet::Connack(Connack{
+                session_present: false,
+                code: ConnectReturnCode::Accepted
+            })).await.unwrap();
+
+            let disconnect = server.read_mqtt_packet(|p| p.get_type()).await.unwrap();
+            assert_eq!(disconnect, PacketType::Disconnect);
+        };
+
+        tokio::join! {
+            runner_future,
+            server_future,
+            client_future
+        };
     }
 
 }

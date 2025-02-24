@@ -66,7 +66,7 @@ impl PingState {
                     None
                 } else {
                     let d = half_keep_alive - diff;
-                    debug!("send ping in {}", d);
+                    trace!("send ping in {}", d);
                     Some(d)
                 }
             },
