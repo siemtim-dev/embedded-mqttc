@@ -22,7 +22,7 @@ queue-vec = { version = "*", default-features = false, path = "./queue-vec"}
 embedded-io-async = "0.6.1"
 defmt = { version = "0.3.10", optional = true }
 heapless = "0.8.0"
-embassy-time = { version = "^0.4.0", default-features = false, optional = true }
+embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false, optional = true }
 embassy-futures = { version = "^0.1.1", default-features = false }
 thiserror = { workspace = true, default-features = false }
 tracing = { version = "0.1.41", optional = true }
@@ -40,7 +40,7 @@ features = ["defmt"]
 
 [dependencies.tokio]
 version = "1.43.0"
-features = ["macros", "time"]
+features = ["macros", "time", "io-util", "net"]
 optional = true
 
 [features]
