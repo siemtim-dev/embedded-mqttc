@@ -3,7 +3,7 @@ use crate::time::{ self, Duration, Instant };
 
 use super::KEEP_ALIVE;
 
-const PING_RETRY_DURATION: Duration = Duration::from_secs(10);
+const PING_RETRY_DURATION: Duration = Duration::from_secs(5);
 const KEEP_ALIVE_DURATION: Duration = Duration::from_secs(KEEP_ALIVE as u64);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,21 +18,23 @@ pub(crate) enum PingState {
 }
 
 impl PingState {
-    pub(crate) fn should_send_ping(&self, now: &Instant) -> bool {
+    pub(crate) fn should_send_ping(&self) -> bool {
+        let now = time::now();
         match self {
             PingState::PingSuccess(instant) => {
-                let diff = ((*now - *instant).as_secs()) as usize;
+                let diff = ((now - *instant).as_secs()) as usize;
                 diff > KEEP_ALIVE / 2
             },
             PingState::AwaitingResponse { last_success: _, ping_request_sent } => {
-                let diff = *now - *ping_request_sent;
+                let diff = now - *ping_request_sent;
                 diff > PING_RETRY_DURATION
             },
         }
     }
 
-    pub(crate) fn is_critical_delay(&self, now: &Instant) -> bool {
-        let diff = *now - *self.last_success();
+    pub(crate) fn is_critical_delay(&self) -> bool {
+        let now = time::now();
+        let diff = now - *self.last_success();
         diff >= Duration::from_secs(KEEP_ALIVE as u64 - 5)
     }
 
@@ -43,14 +45,17 @@ impl PingState {
         }
     }
 
-    pub(crate) fn ping_sent(&mut self, now: &Instant) {
+    pub(crate) fn ping_sent(&mut self) {
+        let now = time::now();
+        info!("ping sent at {}", now);
         *self = PingState::AwaitingResponse { 
             last_success: self.last_success().clone(), 
             ping_request_sent: now.clone()
         };
     }
 
-    pub(crate) fn on_ping_response(&mut self, now: &Instant) {
+    pub(crate) fn on_ping_response(&mut self) {
+        let now = time::now();
         *self = PingState::PingSuccess(now.clone())
     }
 
@@ -93,26 +98,29 @@ mod tests {
 
     #[test]
     fn test_should_send_ping_after_success() {
-        time::test_time::set_default();
+        time::test_time::set_static_now();
 
         let start = time::now();
         let ping_state = PingState::PingSuccess(start.clone());
 
         let a_bit_later = start + Duration::from_secs((KEEP_ALIVE / 2 - 3) as u64);
-        assert_eq!(ping_state.should_send_ping(&a_bit_later), false);
-        assert_eq!(ping_state.is_critical_delay(&a_bit_later), false);
+        time::test_time::set_time(a_bit_later);
+        assert_eq!(ping_state.should_send_ping(), false);
+        assert_eq!(ping_state.is_critical_delay(), false);
 
         let later = start + Duration::from_secs((KEEP_ALIVE / 2 + 5) as u64);
-        assert_eq!(ping_state.should_send_ping(&later), true);
-        assert_eq!(ping_state.is_critical_delay(&later), false);
+        time::test_time::set_time(later);
+        assert_eq!(ping_state.should_send_ping(), true);
+        assert_eq!(ping_state.is_critical_delay(), false);
 
         let too_late = start + Duration::from_secs(KEEP_ALIVE as u64);
-        assert_eq!(ping_state.is_critical_delay(&too_late), true);
+        time::test_time::set_time(too_late);
+        assert_eq!(ping_state.is_critical_delay(), true);
     }
 
     #[test]
     fn test_sould_send_ping_waiting() {
-        time::test_time::set_default();
+        time::test_time::set_static_now();
 
         let start = time::now();
         let ping_state = PingState::AwaitingResponse { 
@@ -121,26 +129,30 @@ mod tests {
         };
 
         let a_bit_later = start + Duration::from_secs(5);
-        assert_eq!(ping_state.should_send_ping(&a_bit_later), false);
-        assert_eq!(ping_state.is_critical_delay(&a_bit_later), false);
+        time::test_time::set_time(a_bit_later);
+        assert_eq!(ping_state.should_send_ping(), false);
+        assert_eq!(ping_state.is_critical_delay(), false);
 
         let later = start + Duration::from_secs(11);
-        assert_eq!(ping_state.should_send_ping(&later), true);
-        assert_eq!(ping_state.is_critical_delay(&later), false);
+        time::test_time::set_time(later);
+        assert_eq!(ping_state.should_send_ping(), true);
+        assert_eq!(ping_state.is_critical_delay(), false);
 
         let too_late = start + Duration::from_secs(KEEP_ALIVE as u64);
-        assert_eq!(ping_state.is_critical_delay(&too_late), true);
+        time::test_time::set_time(too_late);
+        assert_eq!(ping_state.is_critical_delay(), true);
     }
 
     #[test]
     fn test_on_ping_sent () {
-        time::test_time::set_default();
+        time::test_time::set_static_now();
         let start = time::now();
         
         let mut ping_state = PingState::PingSuccess(start.clone());
 
         let ping_sent = start + Duration::from_secs(20);
-        ping_state.ping_sent(&ping_sent);
+        time::test_time::set_time(ping_sent);
+        ping_state.ping_sent();
 
         assert_eq!(ping_state, PingState::AwaitingResponse { 
             last_success: start, 
@@ -148,6 +160,25 @@ mod tests {
         });
     }
 
-    //TODO test ping pause
+    #[test]
+    fn test_ping_pause() {
+        time::test_time::set_static_now();
+        let start = time::now();
+        let ping_state = PingState::PingSuccess(start.clone());
+
+        let pause = ping_state.ping_pause().expect("there must be a ping pause");
+
+        assert_eq!(ping_state.should_send_ping(), false);
+
+        time::test_time::advance_time(pause - Duration::from_millis(10));
+
+        assert_eq!(ping_state.should_send_ping(), false);
+
+        time::test_time::advance_time(Duration::from_millis(11));
+
+        assert_eq!(ping_state.ping_pause(), None);
+        assert_eq!(ping_state.should_send_ping(), true);
+        
+    }
 
 }

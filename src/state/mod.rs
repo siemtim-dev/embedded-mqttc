@@ -166,7 +166,7 @@ impl <M: RawMutex> State<M> {
     fn process_pingresp(&self) {
         debug!("received pingresp from broker");
         self.ping.lock(|inner|{
-            inner.borrow_mut().on_ping_response(&time::now());
+            inner.borrow_mut().on_ping_response();
         });
     }
 
@@ -191,17 +191,16 @@ impl <M: RawMutex> State<M> {
 
         let is_critical = self.ping.lock(|inner|{
             let mut inner = inner.borrow_mut();
-            let now = time::now();
 
-            if inner.should_send_ping(&now) {
+            if inner.should_send_ping() {
                 let ping = Packet::Pingreq;
                 let sent = Self::encode_packet(&ping, send_buffer)?;
                 if sent {
-                    inner.ping_sent(&now);
+                    inner.ping_sent();
                 }
             }
     
-            Ok(inner.is_critical_delay(&now))
+            Ok(inner.is_critical_delay())
         })?;
 
         // Do not do anything else if the ping delay is critical (near keepalive)
