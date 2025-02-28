@@ -1,13 +1,13 @@
 use core::{cell::RefCell, cmp::min, future::Future, pin::Pin, task::{Context, Poll}};
 
-use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter};
+use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_sync::{blocking_mutex::{raw::CriticalSectionRawMutex, Mutex}, waitqueue::WakerRegistration};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
-use mqttrs::{encode_slice, Packet};
-use crate::{network::{NetworkConnection, TryRead, TryWrite}, MqttError, misc::MqttPacketReader};
-
+use mqttrs::Packet;
+use crate::{mqtt::MqttPacketError, NetworkConnection, NetworkError, TryRead, TryWrite};
+use crate::mqtt::ReadMqttPacket;
 pub struct BufferedStream<const N: usize> {
-    inner: Mutex<CriticalSectionRawMutex, RefCell<BufferedStreamInner<N>>>
+    pub(crate) inner: Mutex<CriticalSectionRawMutex, RefCell<BufferedStreamInner<N>>>
 }
 
 impl <const N: usize> BufferedStream<N> {
@@ -52,10 +52,10 @@ impl <const N: usize> BufferedStream<N> {
     }
 }
 
-struct BufferedStreamInner<const N: usize> {
-    buffer: Buffer<[u8; N]>,
-    read_waker: WakerRegistration,
-    write_waker: WakerRegistration
+pub(crate) struct BufferedStreamInner<const N: usize> {
+    pub(crate) buffer: Buffer<[u8; N]>,
+    pub(crate) read_waker: WakerRegistration,
+    pub(crate) write_waker: WakerRegistration
 }
 
 impl <const N: usize> BufferedStreamInner<N> {
@@ -238,7 +238,7 @@ impl <const N: usize> Write for BufferedStream<N> {
 
 #[cfg(test)]
 mod stream_tests {
-    use crate::network::fake::BufferedStream;
+    use super::BufferedStream;
 
 
     #[tokio::test]
@@ -276,8 +276,8 @@ mod stream_tests {
 
 
 pub struct ServerConnection<'a, const N: usize> {
-    out_stream: &'a BufferedStream<N>,
-    in_stream: &'a BufferedStream<N>
+    pub(crate) out_stream: &'a BufferedStream<N>,
+    pub(crate) in_stream: &'a BufferedStream<N>
 }
 
 impl <'a, const N: usize> ServerConnection <'a, N>{
@@ -350,7 +350,7 @@ impl <'a, const N: usize> TryWrite for ClientConnection<'a, N>  {
 }
 
 impl <'a, const N: usize> NetworkConnection for ClientConnection<'a, N> {
-    async fn connect(&mut self) -> Result<(), MqttError> {
+    async fn connect(&mut self) -> Result<(), NetworkError> {
         Ok(())
     }
 }
@@ -386,70 +386,41 @@ pub fn new_connection<'a, const N: usize>(resources: &'a ConnectionRessources<N>
 
 }
 
-pub trait WriteMqttPacket {
-    fn write_mqtt_packet(&self, packet: &Packet<'_>) -> impl Future<Output = Result<(), MqttError>>;
-}
-
-impl <const N: usize> WriteMqttPacket for BufferedStream<N> {
-    async fn write_mqtt_packet(&self, packet: &Packet<'_>) -> Result<(), MqttError> {
-        let mut bytes = [0; 256];
-        let n = encode_slice(packet, &mut bytes)
-            .map_err(|_| MqttError::CodecError)?;
-
-        let mut to_write = &bytes[..n];
-
-        while ! to_write.is_empty() {
-            let n = self.write_async(&bytes[..n]).await 
-                .map_err(|_| MqttError::InternalError)?;
-
-            to_write = &to_write[n..];
-        }
-
-        Ok(())
-    }
-}
-
-impl <'a, const N: usize> WriteMqttPacket for ServerConnection<'a, N> {
-    fn write_mqtt_packet(&self, packet: &Packet<'_>) -> impl Future<Output = Result<(), MqttError>>{
-        self.out_stream.write_mqtt_packet(packet)
-    }
-}
-
 
 pub trait ReadAtomic: ErrorType {
 
-    fn read_atomic<T, F>(&self, f: F) -> impl Future<Output = Result<T, MqttError>>
-        where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError>;
+    fn read_atomic<T, F>(&self, f: F) -> impl Future<Output = Result<T, MqttPacketError>>
+        where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError>;
 
-    
-    fn read_mqtt_packet<O, R>(&self, o: O) -> impl Future<Output = Result<R, MqttError>>
+    fn read_mqtt_packet<O, R>(&self, o: O) -> impl Future<Output = Result<R, MqttPacketError>>
         where O: Fn(&Packet<'_>) -> R {
         async move {
             self.read_atomic(|reader|{
                 let packet = reader.read_packet()?;
-
+    
                 if let Some(packet) = packet {
                     let result = o(&packet);
                     Ok(Some(result))
-
+    
                 } else {
                     Ok(None)
                 }
-            }).await
-        } 
+            })
+            .await
+        }
     }
 
 }
 
-pub struct ReadAtomicFuture<'b, T, F, const N: usize> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError> {
+pub struct ReadAtomicFuture<'b, T, F, const N: usize> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError> {
     f: F,
     stream: &'b BufferedStream<N>
 }
 
 impl <'b, T, F, const N: usize> Future for ReadAtomicFuture<'b, T, F, N> 
-    where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError> {
+    where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError> {
     
-    type Output = Result<T, MqttError>;
+    type Output = Result<T, MqttPacketError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         
@@ -475,11 +446,11 @@ impl <'b, T, F, const N: usize> Future for ReadAtomicFuture<'b, T, F, N>
     }
 }
 
-impl <'b, T, F, const N: usize> Unpin for ReadAtomicFuture<'b, T, F, N> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError> {}
+impl <'b, T, F, const N: usize> Unpin for ReadAtomicFuture<'b, T, F, N> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError> {}
 
 impl <const N: usize> ReadAtomic for BufferedStream<N> {
-    fn read_atomic<T, F>(&self, f: F) -> impl Future<Output = Result<T, MqttError>>
-        where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError> {
+    fn read_atomic<T, F>(&self, f: F) -> impl Future<Output = Result<T, MqttPacketError>>
+        where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError> {
             ReadAtomicFuture{
                 f,
                 stream: self
@@ -488,23 +459,21 @@ impl <const N: usize> ReadAtomic for BufferedStream<N> {
 }
 
 impl <'a, const N: usize> ReadAtomic for ServerConnection<'a, N> {
-    async fn read_atomic<T, F>(&self, f: F) -> Result<T, MqttError> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttError>{
+    async fn read_atomic<T, F>(&self, f: F) -> Result<T, MqttPacketError> where F: Fn(&dyn BufferReader) -> Result<Option<T>, MqttPacketError>{
             self.in_stream.read_atomic(f).await
     }
 }
 
 #[cfg(test)]
 mod connection_tests {
+    use core::time::Duration;
+
     use embedded_io_async::{Read, Write};
 
-    use crate::network::fake::{new_connection, ConnectionRessources};
-
-    use crate::time;
-    use crate::time::Duration;
+    use crate::fake::{new_connection, ConnectionRessources};
 
     #[tokio::test]
     async fn test_connection() {
-        time::test_time::set_default();
 
         let resources = ConnectionRessources::<4>::new();
 
@@ -515,11 +484,11 @@ mod connection_tests {
             let n = client.write(&[0, 1, 2, 3]).await.unwrap();
             assert_eq!(n, 4);
 
-            time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
 
             for i in 4..8 {
                 client.write(&[i]).await.unwrap();
-                time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
 
         };

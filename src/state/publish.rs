@@ -302,7 +302,7 @@ impl PublishQueue {
 mod tests {
     extern crate std;
 
-    use buffer::{new_stack_buffer, Buffer, BufferReader};
+    use buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use mqttrs::{decode_slice_with_len, Packet, Pid, Publish, QoS};
 

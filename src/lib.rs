@@ -17,8 +17,6 @@ pub use mqttrs::QoS;
 // This must come first so the macros are visible
 pub(crate) mod fmt;
 
-pub mod network;
-
 pub mod io;
 pub(crate) mod state;
 pub(crate) mod time;
@@ -51,12 +49,15 @@ impl Deref for UniqueID {
     }
 }
 
-#[derive(Debug, Error, Clone, Copy, PartialEq)]
+#[derive(Debug, Error, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttError {
 
     #[error("TCP Connection failed")]
-    ConnectionFailed,
+    ConnectionFailed(network::NetworkError),
+
+    #[error("The buffer is full")]
+    BufferFull,
 
     #[error("connection rejected by broker")]
     ConnackError,

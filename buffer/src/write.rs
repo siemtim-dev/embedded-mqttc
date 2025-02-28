@@ -75,7 +75,7 @@ impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> DerefMut for Write<'a, T>{
 
 #[cfg(test)]
 mod tests {
-    use crate::{Buffer, BufferWriter};
+    use crate::{Buffer, BufferWriter, ReadWrite};
 
 
     #[test]

@@ -6,37 +6,40 @@ license = "Apache 2.0"
 
 [workspace]
 members = [
-    "buffer", "queue-vec"
+    "buffer", "network", "queue-vec"
 ]
 
 ## Workspace wide dependencies
 [workspace.dependencies]
 thiserror = { version = "2.0.11", default-features = false }
+heapless = "0.8.0"
+
+[workspace.dependencies.mqttrs]
+version = "0.4"
+git = "https://github.com/00imvj00/mqttrs.git"
+rev = "dd9d381b401b1b7353c43b36123f1b2ea5fa80a1"
+default-features = false
 
 [dependencies]
 ## From Workspace
 buffer = { version = "*", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
 queue-vec = { version = "*", default-features = false, path = "./queue-vec"}
+mqttrs = { workspace = true, default-features = false }
+thiserror = { workspace = true, default-features = false }
+network = { version = "*", path = "./network", default-features = false }
+heapless = { workspace = true }
 
 ## Other
 embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
 defmt = { version = "0.3.10", optional = true }
-heapless = "0.8.0"
 embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false, optional = true }
 embassy-futures = { version = "^0.1.1", default-features = false }
-thiserror = { workspace = true, default-features = false }
 tracing = { version = "0.1.41", optional = true }
+
 
 [dependencies.embassy-sync]
 version = "0.6.2"
 default-features = false
-
-[dependencies.mqttrs]
-version = "0.4"
-git = "https://github.com/00imvj00/mqttrs.git"
-rev = "dd9d381b401b1b7353c43b36123f1b2ea5fa80a1"
-default-features = false
-features = ["defmt"]
 
 [dependencies.tokio]
 version = "1.43.0"
@@ -45,15 +48,15 @@ optional = true
 
 [features]
 default = [ "std" ]
-embassy = [ "dep:embassy-time" ]
-std = [ "embassy-sync/std", "queue-vec/std", "dep:tokio" ]
-defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "buffer/defmt"]
-tracing = [ "std", "dep:tracing" ]
+embassy = [ "dep:embassy-time", "network/embassy" ]
+std = [ "embassy-sync/std", "queue-vec/std", "dep:tokio", "network/std" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "buffer/defmt", "network/defmt" ]
+tracing = [ "std", "dep:tracing", "network/tracing" ]
 test_with_broker = [ "std" ]
 
 [dev-dependencies]
 
-embassy-time = { version = "^0.4.0", default-features = false, features = ["std"]}
+embassy-time = { version = "0.3.2", default-features = false, features = ["std"]}
 embassy-sync = { version = "0.6.2", default-features = false, features = ["std"]}
 
 tokio = { version = "1.43.0", features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }

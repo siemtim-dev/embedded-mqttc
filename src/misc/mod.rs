@@ -1,5 +1,5 @@
 
-
+/*
 use buffer::{BufferReader, BufferWriter};
 use mqttrs::{decode_slice_with_len, encode_slice, Packet};
 
@@ -67,3 +67,5 @@ impl <T> MqttPacketReader for T where T: BufferReader + ?Sized {
         }
     }
 }
+
+    */

@@ -1,0 +1,34 @@
+[package]
+name = "network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# From workspace
+buffer = { version = "*", path = "../buffer", default-features = false, features = ["serde", "embedded"]}
+mqttrs = { workspace = true }
+thiserror = { workspace = true }
+heapless = { workspace = true }
+
+## Other
+embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
+defmt = { version = "0.3.10", optional = true }
+tracing = { version = "0.1.41", optional = true }
+embassy-net = { version = "0.5.0", optional = true, features = ["dns", "tcp", "proto-ipv4", "proto-ipv6", "medium-ip"] }
+embassy-futures = { version = "^0.1.1", default-features = false }
+
+[dependencies.embassy-sync]
+version = "0.6.2"
+default-features = false
+
+[dependencies.tokio]
+version = "1.43.0"
+features = ["macros", "io-util", "net"]
+optional = true
+
+[features]
+default = [ "std", "embassy" ]
+embassy = [ "dep:embassy-net" ]
+std = [ "embassy-sync/std", "dep:tokio" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "buffer/defmt", "embassy-net/defmt", "mqttrs/defmt"]
+tracing = [ "std", "dep:tracing" ]

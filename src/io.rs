@@ -1,10 +1,13 @@
 use core::{cell::RefCell, future::Future, pin::Pin};
 
-use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter};
+use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_futures::select::{select, select3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
 use mqttrs::{decode_slice_with_len, Packet, QoS};
-use crate::{client::MqttClient, misc::{MqttPacketWriter, WritePacketError}, network::{Network, NetworkConnection}, state::State, time, ClientConfig, MqttError, MqttEvent, MqttPublish, MqttRequest};
+use network::mqtt::MqttPacketError;
+use network::NetworkError;
+use network::{ mqtt::WriteMqttPacketMut, NetwordSendReceive, NetworkConnection };
+use crate::{client::MqttClient, state::State, time, ClientConfig, MqttError, MqttEvent, MqttPublish, MqttRequest};
 
 use crate::time::Duration;
 
@@ -86,12 +89,14 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
     /// Receive / sent bytes from / to the network
     /// Sends blocking if there are bytes to send
     /// Receives blocking if there are no more bytes to send.
-    async fn network_send_receive<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+    async fn network_send_receive<N: NetworkConnection>(&self, connection: &mut N) -> Result<(), MqttError> {
         let mut send_buffer = self.send_buffer.borrow_mut();
         // let mut connection = self.connection.borrow_mut();
         
         if send_buffer.has_remaining_len() {
-            let n = connection.send(&mut send_buffer).await?;
+            let n = connection.send(&mut send_buffer).await
+                .map_err(|e| MqttError::ConnectionFailed(e))?;
+
             trace!("sent {} bytes to network; send_buffer remaining: {}", n, send_buffer.remaining_len());
         } else {
             trace!("send buffer is empty, skipping send");
@@ -100,10 +105,12 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         let mut recv_buffer = self.recv_buffer.borrow_mut();
         // Do not block for receiving if there is still something to send
         if send_buffer.has_remaining_len() {
-            let n = connection.try_receive(&mut recv_buffer).await?;
+            let n = connection.try_receive(&mut recv_buffer).await
+                .map_err(|e| MqttError::ConnectionFailed(e))?;
             trace!("try_receive {} bytes from network", n);
         } else {
-            let n = connection.receive(&mut recv_buffer).await?;
+            let n = connection.receive(&mut recv_buffer).await
+                .map_err(|e| MqttError::ConnectionFailed(e))?;
             trace!("receive {} bytes from network", n);
         }
 
@@ -138,7 +145,7 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
     /// First tries to write outgoing traffic to buffer
     /// Then tries to read / write to / from the connection
     /// Then read data from receive buffer
-    async fn work_network<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<!, MqttError> {
+    async fn work_network<N: NetworkConnection>(&self, connection: &mut N) -> Result<!, MqttError> {
         loop {
             // Try to send packets first before blocking for network traffic
             // Send packets (Ping, Connect, Publish)
@@ -210,30 +217,35 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         }
     }
 
-    async fn connect<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+    async fn connect<N: NetworkConnection>(&self, connection: &mut N) -> Result<(), MqttError> {
         self.send_buffer.borrow_mut().reset();
         self.recv_buffer.borrow_mut().reset();
         
         let mut tries = 0;
-        while tries < 5 {
+        loop {
 
             let result = connection.connect().await;
-            if result.is_err() {
-                tries += 1;
-                warn!("{}. try to connecto to host failed", tries);
-                time::sleep(Duration::from_secs(3)).await;
-            } else {
-                info!("connect to broker success");
-                return Ok(())
-            }
-            
-        }
 
-        error!("{} tries to connect failed", tries);
-        Err(MqttError::ConnectionFailed)
+            match result {
+                Ok(()) => {
+                    info!("connect to broker success");
+                    return Ok(())
+                },
+                Err(e) => {
+                    tries += 1;
+                    if tries < 5 {
+                        warn!("{}. try to connecto to host failed", tries);
+                        time::sleep(Duration::from_secs(3)).await;
+                    } else {
+                        error!("{} tries to connect failed", tries);
+                        return Err(MqttError::ConnectionFailed(e));
+                    }
+                },
+            }
+        }
     }
 
-    async fn work<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+    async fn work<N: NetworkConnection>(&self, connection: &mut N) -> Result<(), MqttError> {
         // Reset state on new connection
         self.state.reset();
             
@@ -244,12 +256,12 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         match select(network_future, request_future).await {
             embassy_futures::select::Either::First(net_result) => {
                 let err = net_result.unwrap_err();
-                error!("network infinite job finished: {}", err);
+                error!("network infinite job finished: {}", &err);
                 Err(err)
             },
             embassy_futures::select::Either::Second(req_result) => {
                 if let Err(err) = req_result {
-                    error!("infinite request receive job finished: {}", err);
+                    error!("infinite request receive job finished: {}", &err);
                     Err(err)
                 } else {
                     info!("disconnect request received: stopping jobs");
@@ -259,24 +271,27 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         }
     }
 
-    async fn disconnect<N: NetworkConnection>(&self, connection: &mut Network<'_, N>) -> Result<(), MqttError> {
+    async fn disconnect<N: NetworkConnection>(&self, connection: &mut N) -> Result<(), MqttError> {
         
         let mut send_buffer = self.send_buffer.borrow_mut();
         let mut send_buffer_writer = send_buffer.create_writer();
 
-        send_buffer_writer.write_packet(&Packet::Disconnect).map_err(|err| {
+        send_buffer_writer.write_mqtt_packet_sync(&Packet::Disconnect).map_err(|err| {
             match err {
-                WritePacketError::NotEnaughSpace => {
+                MqttPacketError::NotEnaughBufferSpace => {
                     warn!("could not write Disconnect to send buffer: full");
-                    MqttError::ConnectionFailed
+                    MqttError::BufferFull
                 },
-                WritePacketError::Other(mqtt_error) => mqtt_error,
+                MqttPacketError::CodecError => MqttError::CodecError,
+                MqttPacketError::IoError(_) => MqttError::ConnectionFailed(NetworkError::ConnectionFailed),
+                MqttPacketError::NetworkError(network_error) => MqttError::ConnectionFailed(network_error),
             }
         })?;
         drop(send_buffer_writer);
 
         let mut send_buffer_reader = send_buffer.create_reader();
-        connection.send_all(&mut send_buffer_reader).await?;
+        connection.send_all(&mut send_buffer_reader).await
+            .map_err(|e| MqttError::ConnectionFailed(e))?;
 
         // Reset send buffer to be ready to 
         self.recv_buffer.borrow_mut().reset();
@@ -291,19 +306,17 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
             connection.get_unchecked_mut()
         };
 
-        let mut connection = Network::new(connection);
-
-        self.connect(&mut connection).await?;
+        self.connect(connection).await?;
 
         loop {
-            let result = self.work(&mut connection).await;
+            let result = self.work(connection).await;
             match result {
                 Ok(()) => {
                     break;
                 }
-                Err(MqttError::ConnectionFailed) => {
-                    warn!("conection faild, reconnect");
-                    self.connect(&mut connection).await?;
+                Err(MqttError::ConnectionFailed(e)) => {
+                    warn!("reconnecting, conection faild: {}", e);
+                    self.connect(connection).await?;
                 }
                 Err(err) => {
                     return Err(err);
@@ -311,7 +324,7 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
             }
         }
 
-        self.disconnect(&mut connection).await?;
+        self.disconnect(connection).await?;
 
         Ok(())
 
@@ -322,7 +335,7 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
 mod test {
     use core::pin::Pin;
 
-    use crate::misc::MqttPacketReader;
+    // use crate::misc::MqttPacketReader;
     use crate::state::KEEP_ALIVE;
     use crate::time::Duration;
 
@@ -331,7 +344,8 @@ mod test {
     use mqttrs::{Connack, ConnectReturnCode, Packet, PacketType, QoS, Suback, SubscribeReturnCodes};
     use crate::time;
 
-    use crate::{network::fake::{self, ConnectionRessources, ReadAtomic, WriteMqttPacket}, ClientConfig};
+    use network::{fake::{self, ConnectionRessources, ReadAtomic}, mqtt::{ReadMqttPacket, WriteMqttPacket}};
+    use crate::ClientConfig;
 
     use super::MqttEventLoop;
 
@@ -516,6 +530,5 @@ mod test {
             client_future
         };
     }
-
 }
 

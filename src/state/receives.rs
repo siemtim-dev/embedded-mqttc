@@ -1,7 +1,8 @@
 
 use buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use crate::{misc::{MqttPacketWriter, WritePacketError}, time::Instant};
+use network::mqtt::{MqttPacketError, WriteMqttPacketMut};
+use crate::time::Instant;
 use mqttrs::{Packet, Pid, Publish, QosPid};
 use queue_vec::QueuedVec;
 
@@ -55,12 +56,12 @@ impl ReceivedPublish {
     }
 
     fn send_pubcomp(&mut self, pid: Pid, send_buffer: &mut impl BufferWriter) {
-        let result = send_buffer.write_packet(&Packet::Pubcomp(pid));
+        let result = send_buffer.write_mqtt_packet_sync(&Packet::Pubcomp(pid));
         match result {
             Ok(()) => {
                 self.state = ReceiveState::Done;
             },
-            Err(WritePacketError::NotEnaughSpace) => {
+            Err(MqttPacketError::NotEnaughBufferSpace) => {
                 debug!("not enaugh space to write pubcomp to send buffer for {}", pid);
             },
             Err(e) => {
@@ -78,12 +79,12 @@ impl ReceivedPublish {
     }
 
     fn send_puback(&mut self, pid: Pid, send_buffer: &mut impl BufferWriter) {
-        let result = send_buffer.write_packet(&Packet::Puback(pid));
+        let result = send_buffer.write_mqtt_packet_sync(&Packet::Puback(pid));
         match result {
             Ok(()) => {
                 self.state = ReceiveState::Done;
             },
-            Err(WritePacketError::NotEnaughSpace) => {
+            Err(MqttPacketError::NotEnaughBufferSpace) => {
                 debug!("not enaugh space to write puback to send buffer for {}", pid);
             },
             Err(e) => {
@@ -93,12 +94,12 @@ impl ReceivedPublish {
     }
 
     fn send_pubrec(&mut self, pid: Pid, send_buffer: &mut impl BufferWriter) {
-        let result = send_buffer.write_packet(&Packet::Pubrec(pid));
+        let result = send_buffer.write_mqtt_packet_sync(&Packet::Pubrec(pid));
         match result {
             Ok(()) => {
                 self.state = ReceiveState::AwaitPubrel(time::now());
             },
-            Err(WritePacketError::NotEnaughSpace) => {
+            Err(MqttPacketError::NotEnaughBufferSpace) => {
                 debug!("not enaugh space to write pubrec to send buffer for {}", pid);
             },
             Err(e) => {

@@ -26,7 +26,7 @@ pub(crate) mod publish;
 pub(crate) mod sub;
 pub(crate) mod pid;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ConnectionState {
     /// TCP Connection established, but nothis has happened yet
     InitialState,
@@ -305,7 +305,7 @@ mod tests {
     use core::time::Duration;
     use std::time::Instant;
 
-    use buffer::{new_stack_buffer, Buffer, BufferReader};
+    use buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use heapless::String;
     use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet};

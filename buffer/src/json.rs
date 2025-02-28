@@ -1,15 +1,13 @@
 use serde::Deserialize;
 use serde_json_core::{from_slice, to_slice};
 
-use crate::{Buffer, BufferError, BufferReader, BufferWriter, Reader, Write};
-
-
+use crate::{Buffer, BufferError, BufferReader, BufferWriter};
 
 pub trait JsonWriter {
     fn serialize_json<T: serde::Serialize>(&mut self, src: &T) -> Result<usize, BufferError>;
 }
 
-impl <'a, S: AsMut<[u8]> + AsRef<[u8]>> JsonWriter for Write<'a, S> {
+impl <'a, W: BufferWriter> JsonWriter for W {
     fn serialize_json<T: serde::Serialize>(&mut self, src: &T) -> Result<usize, BufferError> {
         
         let n = to_slice(src, self)
@@ -37,7 +35,7 @@ pub trait JsonReader<'a> {
 }
 
 
-impl <'a, S: AsMut<[u8]> + AsRef<[u8]>> JsonReader<'a> for Reader<'a, S> {
+impl <'a, R: BufferReader> JsonReader<'a> for R {
     fn deserialize_json<'de, T: Deserialize<'de>>(&'de mut self) -> Result<T, BufferError> where 'a: 'de {
         
         let (res, n) = from_slice::<'de, T>(self)
@@ -55,7 +53,7 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::Buffer;
+    use crate::{Buffer, ReadWrite};
 
     use super::{JsonReader, JsonWriter};
 

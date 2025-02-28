@@ -1,6 +1,8 @@
-use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
 
-use embassy_mqtt::{io::MqttEventLoop, network::std::StdNetworkConnection, ClientConfig, ClientCredentials};
+
+use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
+use network::std::StdNetworkConnection;
+use embassy_mqtt::{io::MqttEventLoop, ClientConfig, ClientCredentials};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use mqttrs::QoS;
 

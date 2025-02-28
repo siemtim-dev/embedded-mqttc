@@ -1,7 +1,8 @@
 
+
 use std::pin::Pin;
 
-use embassy_mqtt::network::fake::{new_connection, ConnectionRessources};
+use network::fake::{new_connection, ConnectionRessources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_io_async::Read;
 use mqttrs::{decode_slice, Packet};

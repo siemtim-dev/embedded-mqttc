@@ -33,6 +33,12 @@ pub enum BufferError {
     JsonDeserialize(serde_json_core::de::Error)
 }
 
+pub trait ReadWrite {
+    fn create_reader<'a>(&'a mut self) -> impl BufferReader + 'a;
+    fn create_writer<'a>(&'a mut self) -> impl BufferWriter + 'a;
+}
+
+
 #[derive(Debug)]
 pub struct Buffer<T: AsMut<[u8]> + AsRef<[u8]>> {
     pub(crate) source: T,
@@ -175,15 +181,6 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         }
     }
 
-    pub fn create_writer(&mut self) -> Write<'_, T> {
-        self.shift();
-        Write::new(self)
-    }
-
-    pub fn create_reader(&mut self) -> Reader<'_, T> {
-        Reader::new(self)
-    }
-
     pub fn create_reader_with_max(&mut self, max_bytes: usize) -> Reader<'_, T> {
         Reader::new_with_max(self, max_bytes)
     }
@@ -222,6 +219,29 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         }
     }
 
+}
+
+/*
+pub fn create_writer(&mut self) -> Write<'_, T> {
+        self.shift();
+        Write::new(self)
+    }
+
+    pub fn create_reader(&mut self) -> Reader<'_, T> {
+        Reader::new(self)
+    }
+*/
+
+impl <T: AsMut<[u8]> + AsRef<[u8]>> ReadWrite for Buffer<T> {
+    fn create_reader<'a>(&'a mut self) -> impl BufferReader + 'a {
+        Reader::new(self)
+    }
+
+    fn create_writer<'a>(&'a mut self) -> impl BufferWriter + 'a {
+        self.shift();
+        Write::new(self)
+
+    }
 }
 
 #[cfg(feature = "std")]

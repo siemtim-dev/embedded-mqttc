@@ -6,7 +6,7 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-use crate::MqttError;
+use super::NetworkError;
 
 pub struct StdNetworkConnection<T: ToSocketAddrs> {
     stream: Option<TcpStream>,
@@ -123,9 +123,9 @@ impl <T: ToSocketAddrs> Write for StdNetworkConnection<T> {
 }
 
 impl <T: ToSocketAddrs> super::NetworkConnection for StdNetworkConnection<T> {
-    async fn connect(&mut self) -> Result<(), crate::MqttError> {
+    async fn connect(&mut self) -> Result<(), NetworkError> {
         let stream: TcpStream = TcpStream::connect(&self.addr).await
-            .map_err(|_| MqttError::ConnectionFailed)?;
+            .map_err(|_| NetworkError::ConnectionFailed)?;
         self.stream = Some(stream);
         Ok(())
     }
