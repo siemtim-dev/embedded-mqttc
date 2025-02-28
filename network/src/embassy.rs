@@ -69,7 +69,7 @@ impl <'a> EmbassyNetworkConnection<'a> {
         let ip_v6_future = async {
             let result = dns_client.query(hostname, DnsQueryType::Aaaa).await;
 
-            match result.to_owned() {
+            match result {
                 Ok(addrs) => Ok(addrs.into_iter().next()),
                 Err(embassy_net::dns::Error::InvalidName) => Ok(None),
                 Err(e) => Err(e)

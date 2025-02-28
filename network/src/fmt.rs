@@ -5,9 +5,18 @@ use core::fmt::Debug;
 #[allow(dead_code)]
 pub(crate) struct Debug2Format<T: Debug>(pub(crate) T);
 
+#[cfg(feature = "tracing")]
 impl <T: Debug> core::fmt::Display for crate::fmt::Debug2Format<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl <T: Debug> defmt::Format for crate::fmt::Debug2Format<T> {
+    fn format(&self, fmt: defmt::Formatter) {
+        let d = defmt::Debug2Format(&self.0);
+        d.format(fmt);
     }
 }
 

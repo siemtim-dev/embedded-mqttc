@@ -8,6 +8,7 @@ use thiserror::Error;
 
 
 pub(crate) mod fmt;
+use fmt::Debug2Format;
 
 
 #[cfg(feature = "embassy")]
@@ -75,7 +76,7 @@ impl <T> TryWrite for T where T: Write + WriteReady{
     }
 }
 
-pub trait NetworkConnection: Read + Write + TryWrite + TryRead {
+pub trait NetworkConnection: Read + Write + TryWrite + TryRead + ErrorType {
 
     /// Used to establish a connection and reconnect after a connection fail
     fn connect(&mut self) -> impl Future<Output = Result<(), NetworkError>>;
@@ -97,7 +98,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
     async fn send_all(&mut self, buffer: &mut impl BufferReader) -> Result<(), NetworkError> {
         self.write_all(buffer)
             .await.map_err(|e| {
-                error!("error sending to network: {}", e);
+                error!("error sending to network: {}", Debug2Format(e));
                 NetworkError::ConnectionFailed
             })?;
 
@@ -109,7 +110,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
         let reader = buf.create_reader();
         let result = self.write(&reader[..]).await
             .map_err(|e| {
-                error!("error sending to network: {}", e);
+                error!("error sending to network: {}", Debug2Format(e));
                 NetworkError::ConnectionFailed
             });
         match result {
@@ -129,7 +130,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
         let reader = buf.create_reader();
         let result = self.try_write(&reader[..]).await
             .map_err(|e| {
-                error!("error try_sending to network: {}", e);
+                error!("error try_sending to network: {}", Debug2Format(e));
                 NetworkError::ConnectionFailed}
             );
         match result {
@@ -154,7 +155,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
 
         let result = self.read(&mut writer).await
             .map_err(|e| {
-                error!("error receive from network: {}", e);
+                error!("error receive from network: {}", Debug2Format(e));
                 NetworkError::ConnectionFailed
             });
 
@@ -182,7 +183,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
 
         let result = self.try_read(&mut writer).await
             .map_err(|e| {
-                error!("error try_receive from network: {}", e);
+                error!("error try_receive from network: {}", Debug2Format(e));
                 NetworkError::ConnectionFailed
             });
 

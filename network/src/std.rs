@@ -1,10 +1,15 @@
 extern crate std;
 
+#[cfg(all(feature = "defmt", feature = "std"))]
+compile_error!("std cannot be logged with defmt!");
+
 use embedded_io_async::Write;
 use embedded_io_async::{ErrorKind, ErrorType, Read};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+
+use crate::Debug2Format;
 
 use super::NetworkError;
 
@@ -47,7 +52,7 @@ impl <T: ToSocketAddrs> super::TryRead for StdNetworkConnection<T> {
                     trace!("try_read: network would block");
                     Ok(0) 
                 } else { 
-                    error!("error try_reading from std net: {:?}", e);
+                    error!("error try_reading from std net: {}", Debug2Format(e));
                     Err(ErrorKind::Other) 
                 }
             }
@@ -74,7 +79,7 @@ impl <T: ToSocketAddrs> super::TryWrite for StdNetworkConnection<T> {
                     trace!("try_write: network would block");
                     Ok(0) 
                 } else { 
-                    error!("error try_writing to std net: {:?}", e);
+                    error!("error try_writing to std net: {:?}", Debug2Format(e));
                     Err(ErrorKind::Other) 
                 }
             }
@@ -86,14 +91,14 @@ impl <T: ToSocketAddrs> Read for StdNetworkConnection<T> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         self.stream.as_ref().ok_or(ErrorKind::Other)?.readable().await
         .map_err(|e| {
-            error!("error waiting for std net to be readable: {:?}", e);
+            error!("error waiting for std net to be readable: {}", Debug2Format(e));
             ErrorKind::Other
         })?;
 
         let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
             .read(buf).await
             .map_err(|e| {
-                error!("error reading from std net: {:?}", e);
+                error!("error reading from std net: {}", Debug2Format(e));
                 ErrorKind::Other
             })?;
 
@@ -110,7 +115,7 @@ impl <T: ToSocketAddrs> Write for StdNetworkConnection<T> {
         let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
             .write(buf).await
             .map_err(|e| {
-                error!("error writing to std net: {:?}", e);
+                error!("error writing to std net: {}", Debug2Format(e));
                 ErrorKind::Other
             })?;
 

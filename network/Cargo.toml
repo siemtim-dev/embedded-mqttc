@@ -20,7 +20,7 @@ tokio = { workspace = true , optional = true, features = ["macros", "io-util", "
 embassy-net = { version = "0.5.0", optional = true, features = ["dns", "tcp", "proto-ipv4", "proto-ipv6", "medium-ip"] }
 
 [features]
-default = [ "std", "embassy" ]
+default = [ "embassy", "defmt" ]
 embassy = [ "dep:embassy-net" ]
 std = [ "embassy-sync/std", "dep:tokio" ]
 defmt = ["dep:defmt", "embassy-sync/defmt", "buffer/defmt", "embassy-net/defmt", "mqttrs/defmt"]
