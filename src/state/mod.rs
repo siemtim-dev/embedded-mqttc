@@ -466,11 +466,13 @@ mod tests {
         test.state.set_connection_state(ConnectionState::Connected);
 
         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
         test.expect_no_packet();
 
         time::test_time::advance_time(Duration::from_secs(40));
 
         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
         test.expect_packet(|p| {
             if Packet::Pingreq != *p {
                 panic!("expected Packet::Pingreq");
