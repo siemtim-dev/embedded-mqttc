@@ -5,7 +5,6 @@ use core::mem;
 use embassy_futures::join::join;
 use embassy_net::{dns::{DnsQueryType, DnsSocket}, tcp::TcpSocket, IpAddress, IpEndpoint, Stack};
 use embedded_io_async::{ErrorKind, ErrorType, Read, ReadReady, Write, WriteReady};
-use heapless::String;
 
 use crate::{NetworkConnection, NetworkError, TryRead, TryWrite};
 
@@ -57,11 +56,19 @@ pub struct EmbassyNetworkConnection<'a> {
     socket: Option<TcpSocket<'a>>,
     stack: Stack<'a>,
     resources: EmbassyConnectionResources<'a>,
-    host: String<64>,
+    host: &'a str,
     port: u16
 }
 
 impl <'a> EmbassyNetworkConnection<'a> {
+
+    pub fn new(host: &'a str, port: u16, stack: Stack<'a>, resources: EmbassyConnectionResources<'a>) -> Self {
+        Self {
+            socket: None,
+            stack, resources, 
+            host, port
+        }
+    }
 
     async fn dns_resolve(&self, hostname: &str) -> Result<IpAddress, NetworkError> {
         let dns_client = DnsSocket::new(self.stack);
