@@ -13,6 +13,14 @@ members = [
 [workspace.dependencies]
 thiserror = { version = "2.0.11", default-features = false }
 heapless = "0.8.0"
+embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
+
+embassy-sync = { version = "0.6.2", default-features = false }
+embassy-futures = { version = "^0.1.1", default-features = false }
+
+defmt = { version = "0.3.10" }
+tokio = { version = "1.43.0",  features = ["macros", "time", "io-util", "net"] }
+tracing = { version = "0.1.41" }
 
 [workspace.dependencies.mqttrs]
 version = "0.4"
@@ -21,30 +29,24 @@ rev = "dd9d381b401b1b7353c43b36123f1b2ea5fa80a1"
 default-features = false
 
 [dependencies]
-## From Workspace
+## From Workspace Internal 
 buffer = { version = "*", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
 queue-vec = { version = "*", default-features = false, path = "./queue-vec"}
+network = { version = "*", path = "./network", default-features = false }
+
+# From Workspace external
 mqttrs = { workspace = true, default-features = false }
 thiserror = { workspace = true, default-features = false }
-network = { version = "*", path = "./network", default-features = false }
 heapless = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-futures = { workspace = true }
+defmt = { workspace = true , optional = true }
+tokio = { workspace = true , optional = true }
+embedded-io-async = { workspace = true }
+tracing = { workspace = true, optional = true }
 
 ## Other
-embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
-defmt = { version = "0.3.10", optional = true }
 embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false, optional = true }
-embassy-futures = { version = "^0.1.1", default-features = false }
-tracing = { version = "0.1.41", optional = true }
-
-
-[dependencies.embassy-sync]
-version = "0.6.2"
-default-features = false
-
-[dependencies.tokio]
-version = "1.43.0"
-features = ["macros", "time", "io-util", "net"]
-optional = true
 
 [features]
 default = [ "std" ]
@@ -57,11 +59,12 @@ test_with_broker = [ "std" ]
 [dev-dependencies]
 
 embassy-time = { version = "0.3.2", default-features = false, features = ["std"]}
-embassy-sync = { version = "0.6.2", default-features = false, features = ["std"]}
+embassy-sync = { workspace = true, default-features = false, features = ["std"]}
 
-tokio = { version = "1.43.0", features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
+tokio = {workspace = true, features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
+tracing = { workspace = true }
+
 dotenv = "0.15.0"
-tracing = { version = "0.1.41" }
 test-log = { version = "0.2.17", default-features = false, features = ["trace", "color"] }
 ntest = "0.9.3"
 
