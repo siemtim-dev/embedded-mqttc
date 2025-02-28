@@ -22,8 +22,8 @@ impl PingState {
         let now = time::now();
         match self {
             PingState::PingSuccess(instant) => {
-                let diff = ((now - *instant).as_secs()) as usize;
-                diff > KEEP_ALIVE / 2
+                let diff = now - *instant;
+                diff > KEEP_ALIVE_DURATION / 2
             },
             PingState::AwaitingResponse { last_success: _, ping_request_sent } => {
                 let diff = now - *ping_request_sent;
@@ -174,7 +174,7 @@ mod tests {
 
         assert_eq!(ping_state.should_send_ping(), false);
 
-        time::test_time::advance_time(Duration::from_millis(11));
+        time::test_time::advance_time(Duration::from_millis(20));
 
         assert_eq!(ping_state.ping_pause(), None);
         assert_eq!(ping_state.should_send_ping(), true);
