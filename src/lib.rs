@@ -25,7 +25,7 @@ pub mod client;
 pub(crate) mod misc;
 
 // Reexport important things
-pub use network::*;
+pub use network;
 
 
 static COUNTER: Mutex<CriticalSectionRawMutex, Cell<u64>> = Mutex::new(Cell::new(0));
