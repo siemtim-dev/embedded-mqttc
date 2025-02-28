@@ -5,6 +5,7 @@ use super::KEEP_ALIVE;
 
 const PING_RETRY_DURATION: Duration = Duration::from_secs(5);
 const KEEP_ALIVE_DURATION: Duration = Duration::from_secs(KEEP_ALIVE as u64);
+const ERROR_CORRECTING_DURATION: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -70,7 +71,7 @@ impl PingState {
                     debug!("send ping now!");
                     None
                 } else {
-                    let d = half_keep_alive - diff;
+                    let d = half_keep_alive - diff + ERROR_CORRECTING_DURATION;
                     trace!("send ping in {}", d);
                     Some(d)
                 }
@@ -80,7 +81,7 @@ impl PingState {
                 if diff > PING_RETRY_DURATION {
                     None
                 } else {
-                    Some(PING_RETRY_DURATION - diff)
+                    Some(PING_RETRY_DURATION - diff + ERROR_CORRECTING_DURATION)
                 }
             },
         }
@@ -174,8 +175,9 @@ mod tests {
 
         assert_eq!(ping_state.should_send_ping(), false);
 
-        time::test_time::advance_time(Duration::from_millis(20));
-
+        time::test_time::advance_time(Duration::from_millis(10));
+        
+        assert!(! ping_state.is_critical_delay());
         assert_eq!(ping_state.ping_pause(), None);
         assert_eq!(ping_state.should_send_ping(), true);
         

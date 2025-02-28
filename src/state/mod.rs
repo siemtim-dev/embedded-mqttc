@@ -187,9 +187,8 @@ impl <M: RawMutex> State<M> {
         }
     }
 
-    fn send_packets_connected(&self, send_buffer: &mut impl BufferWriter, control_sender: &impl AsyncSender<MqttEvent>) -> Result<(), MqttError> {
-
-        let is_critical = self.ping.lock(|inner|{
+    pub(crate) fn send_ping(&self, send_buffer: &mut impl BufferWriter) -> Result<(), MqttError> {
+        self.ping.lock(|inner|{
             let mut inner = inner.borrow_mut();
 
             if inner.should_send_ping() {
@@ -200,8 +199,15 @@ impl <M: RawMutex> State<M> {
                 }
             }
     
-            Ok(inner.is_critical_delay())
-        })?;
+            Ok(())
+        })
+    }
+
+    fn send_packets_connected(&self, send_buffer: &mut impl BufferWriter, control_sender: &impl AsyncSender<MqttEvent>) -> Result<(), MqttError> {
+
+        let is_critical = self.ping.lock(|inner|{
+            inner.borrow().is_critical_delay()
+        });
 
         // Do not do anything else if the ping delay is critical (near keepalive)
         if is_critical {

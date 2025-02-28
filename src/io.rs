@@ -1,7 +1,7 @@
 use core::{cell::RefCell, future::Future, pin::Pin};
 
 use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
-use embassy_futures::select::{select, select3};
+use embassy_futures::select::{select, select3, Either3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
 use mqttrs::{decode_slice_with_len, Packet, QoS};
 use network::mqtt::MqttPacketError;
@@ -166,9 +166,13 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
             let on_request_signal_future = self.state.on_requst_added.wait();
             let next_ping_future = self.state.on_ping_required();
             match select3(network_future, on_request_signal_future, next_ping_future).await {
-                embassy_futures::select::Either3::First(res) => res,
-                embassy_futures::select::Either3::Second(_) => Ok(()),
-                embassy_futures::select::Either3::Third(_) => Ok(()),
+                Either3::First(res) => res,
+                Either3::Second(_) => Ok(()),
+                Either3::Third(()) => {
+                    let mut send_buffer = self.send_buffer.borrow_mut();
+                    let mut send_buffer_writer = send_buffer.create_writer();
+                    self.state.send_ping(&mut send_buffer_writer)
+                },
             }?;
 
             let mut send_buffer = self.send_buffer.borrow_mut();
