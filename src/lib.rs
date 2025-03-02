@@ -118,7 +118,7 @@ impl ClientConfig {
 }
 
 pub const MAX_TOPIC_SIZE: usize = 64;
-pub const MQTT_PAYLOAD_MAX_SIZE: usize = 64;
+pub const MQTT_PAYLOAD_MAX_SIZE: usize = 1024;
 
 pub type Topic = heapless::String<MAX_TOPIC_SIZE>;
 
