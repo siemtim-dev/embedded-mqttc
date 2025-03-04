@@ -60,7 +60,7 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> defmt::Format for Buffer<T> {
         defmt::write!(fmt, 
             "Buffer(len = {}, cap = {}, rem_cap = {})",
             self.remaining_len(),
-            self.buf_len(),
+            self.capacity(),
             self.remaining_capacity()
         );
     }
@@ -82,16 +82,16 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
     }
 
     /// Returns the length of the undelying buffer
-    pub fn buf_len(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.source.as_ref().len()
     }
 
     pub fn remaining_capacity(&self) -> usize {
-        self.buf_len() - self.write_position
+        self.capacity() - self.write_position
     }
 
     pub fn has_remaining_capacity(&self) -> bool {
-        self.buf_len() > self.write_position
+        self.capacity() > self.write_position
     }
 
     pub fn remaining_len(&self) -> usize {

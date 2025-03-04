@@ -141,13 +141,21 @@ impl <M: RawMutex> State<M> {
         }
     }
 
-
     fn process_connack(&self, connack: &Connack) -> Result<Option<MqttEvent>, MqttError> {
 
         match connack.code {
             mqttrs::ConnectReturnCode::Accepted => {
                 self.set_connection_state(ConnectionState::Connected);
                 info!("connction to broker established");
+
+                // Add autosubscribe requests
+                self.subscribes.add_auto_subscribes(
+                    &self.config.auto_subscribes,
+                    || self.pid_source.next_pid()
+                );
+
+                self.on_requst_added.signal(5);
+
                 Ok(Some(MqttEvent::Connected))
             },
             mqttrs::ConnectReturnCode::RefusedProtocolVersion | mqttrs::ConnectReturnCode::RefusedIdentifierRejected | mqttrs::ConnectReturnCode::ServerUnavailable => {
@@ -312,8 +320,8 @@ mod tests {
 
     use buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-    use heapless::String;
-    use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet};
+    use heapless::{String, Vec};
+    use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet, PacketType, QoS};
 
     use crate::{io::AsyncSender, state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
 
@@ -375,7 +383,8 @@ mod tests {
 
         let mut config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         config.client_id.push_str("1234567890").unwrap();
@@ -417,7 +426,8 @@ mod tests {
 
         let mut config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         config.client_id.push_str("1234567890").unwrap();
@@ -459,7 +469,8 @@ mod tests {
 
         let config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         let mut test = Test::new(config);
@@ -503,6 +514,56 @@ mod tests {
             }
         });
 
+    }
+
+    #[tokio::test]
+    async fn test_auto_subscribe() {
+
+        let config: ClientConfig = ClientConfig::new_with_auto_subscribes(
+            "asghfdasdhasdh", 
+            None, 
+            [ "test1", "test2" ].into_iter(), 
+            QoS::AtLeastOnce
+        );
+
+        let mut test = Test::new(config);
+
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.expect_packet(|p|{
+            assert_eq!(p.get_type(), PacketType::Connect, "expected connect packet");
+        });
+
+        test.process_packet(&Packet::Connack(Connack { 
+            session_present: false, 
+            code: ConnectReturnCode::Accepted 
+        })).await.unwrap();
+
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.expect_packet(|p|{
+            if let Packet::Subscribe(s) = p {
+                assert_eq!(1, s.topics.len());
+                let topic = s.topics.first().unwrap();
+                assert_eq!(&topic.topic_path, "test1");
+                assert_eq!(topic.qos, QoS::AtLeastOnce);
+            } else {
+                panic!("expected subscribe packet but got {:?}", p.get_type());
+            }
+        });
+
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.expect_packet(|p|{
+            if let Packet::Subscribe(s) = p {
+                assert_eq!(1, s.topics.len());
+                let topic = s.topics.first().unwrap();
+                assert_eq!(&topic.topic_path, "test2");
+                assert_eq!(topic.qos, QoS::AtLeastOnce);
+            } else {
+                panic!("expected subscribe packet but got {:?}", p.get_type());
+            }
+        });
+
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+        test.expect_no_packet();
     }
 
 }

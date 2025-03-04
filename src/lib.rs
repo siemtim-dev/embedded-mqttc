@@ -9,6 +9,8 @@ use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use heapless::String;
 use thiserror::Error;
 
+use heapless::Vec;
+
 pub use buffer::*;
 
 use mqttrs::{Pid, Publish, QosPid};
@@ -19,6 +21,8 @@ pub(crate) mod fmt;
 
 pub mod io;
 pub(crate) mod state;
+use state::sub::MAX_CONCURRENT_REQUESTS;
+
 pub(crate) mod time;
 pub mod client;
 
@@ -100,10 +104,17 @@ impl ClientCredentials {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AutoSubscribe {
+    pub topic: Topic,
+    pub qos: QoS
+}
+
 #[derive(Clone)]
 pub struct ClientConfig {
     pub client_id: String<32>,
-    pub credentials: Option<ClientCredentials>
+    pub credentials: Option<ClientCredentials>,
+    pub auto_subscribes: Vec<AutoSubscribe, MAX_CONCURRENT_REQUESTS>
 }
 
 impl ClientConfig {
@@ -112,8 +123,33 @@ impl ClientConfig {
         cid.push_str(client_id).unwrap();
         Self {
             client_id: cid,
-            credentials
+            credentials,
+            auto_subscribes: Vec::new()
         }
+    }
+
+    pub fn new_with_auto_subscribes<'a>(client_id: &str, credentials: Option<ClientCredentials>, auto_subscribes: impl Iterator<Item = &'a str>, qos: QoS) -> Self {
+        let mut cid = String::new();
+        cid.push_str(client_id).unwrap();
+
+        let mut this = Self {
+            client_id: cid,
+            credentials,
+            auto_subscribes: Vec::new()
+        };
+
+        for topic in auto_subscribes {
+            let mut topic_string = Topic::new();
+            topic_string.push_str(topic).unwrap();
+            let auto_subscribe = AutoSubscribe{
+                topic: topic_string,
+                qos
+            };
+            this.auto_subscribes.push(auto_subscribe).unwrap();
+        }
+
+
+        this
     }
 }
 
