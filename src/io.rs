@@ -107,11 +107,11 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         if send_buffer.has_remaining_len() {
             let n = connection.try_receive(&mut recv_buffer).await
                 .map_err(|e| MqttError::ConnectionFailed(e))?;
-            trace!("try_receive {} bytes from network", n);
+            trace!("try_receive() {} bytes from network", n);
         } else {
             let n = connection.receive(&mut recv_buffer).await
                 .map_err(|e| MqttError::ConnectionFailed(e))?;
-            trace!("receive {} bytes from network", n);
+            trace!("receive() {} bytes from network", n);
         }
 
         Ok(())
@@ -120,22 +120,29 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
     /// Try to read a packet from recv buffer. 
     async fn try_package_receive(&self, send_buffer: &mut impl BufferWriter, recv_buffer: impl BufferReader) -> Result<(), MqttError> {
         if recv_buffer.is_empty() {
+            trace!("try_package_receive(): recv_buffer is empty, cannot read packet");
             return Ok(())
         }
         
         let packet_op = decode_slice_with_len(&recv_buffer[..])
             .map_err(|e| {
-                error!("error decoding package: {}", e);
+                error!("try_package_receive(): error decoding package: {}", e);
                 MqttError::CodecError
             })?;
         
         if let Some((len, packet)) = packet_op {
+            debug!("try_package_receive(): decoded packet from recv_buffer: len = {}, kind = {}", len, packet.get_type());
             recv_buffer.add_bytes_read(len);
             let event_option = 
                 self.state.process_packet(&packet, send_buffer, &self.received_publishes).await?;
             if let Some(event) = event_option {
+                debug!("try_package_receive(): processing packet -> MqttEvent: {}", &event);
                 self.control_sender.publisher().unwrap().publish(event).await;
+            } else {
+                trace!("try_package_receive(): packet processed, no MqttEvent");
             }
+        } else {
+            trace!("try_package_receive(): no complete packet in recv_buffer");
         }
 
         Ok(())
@@ -189,9 +196,9 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
 
             // Try to read a package from the receive buffer and write answers (e. g. acknoledgements) 
             // to the send buffer
-            self.try_package_receive(&mut send_buffer_writer, recv_reader).await?;
+            self.try_package_receive(&mut send_buffer_writer, recv_reader).await?; 
 
-            trace!("after try packege_receive: recv_buffer: {} / {}", recv_buffer.remaining_len(), recv_buffer.remaining_capacity());
+            trace!("after try packege_receive: recv_buffer: {} / {}", recv_buffer.remaining_len(), recv_buffer.capacity());
         }
     }
 
@@ -346,6 +353,8 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
 mod test {
     use core::pin::Pin;
 
+    use heapless::Vec;
+
     // use crate::misc::MqttPacketReader;
     use crate::state::KEEP_ALIVE;
     use crate::time::Duration;
@@ -385,7 +394,8 @@ mod test {
 
         let mut config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         config.client_id.push_str("asjdkaljs").unwrap();
@@ -446,7 +456,8 @@ mod test {
     async fn test_idle_connection() {
         let config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         time::test_time::set_static_now();
@@ -503,7 +514,8 @@ mod test {
     async fn test_disconnect() {
         let config = ClientConfig{
             client_id: String::new(),
-            credentials: None
+            credentials: None,
+            auto_subscribes: Vec::new()
         };
 
         let connection_resources = ConnectionRessources::<1024>::new();

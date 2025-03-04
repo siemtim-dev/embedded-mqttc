@@ -117,7 +117,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
             Ok(n) => {
                 reader.add_bytes_read(n);
                 trace!("sent {} bytes to network", n);
-                Ok(0)
+                Ok(n)
             },
             Err(e) => {
                 Err(e)
@@ -137,7 +137,7 @@ impl <C> NetwordSendReceive for C where C: NetworkConnection {
             Ok(n) => {
                 reader.add_bytes_read(n);
                 trace!("sent {} bytes to network", n);
-                Ok(0)
+                Ok(n)
             },
             Err(e) => {
                 Err(e)

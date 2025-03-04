@@ -40,7 +40,7 @@ impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> BufferWriter for Write<'a, T> {
     }
 
     fn remaining_capacity(&self) -> usize {
-        self.buffer.buf_len() - self.buffer.write_position - self.bytes_written.get()
+        self.buffer.capacity() - self.buffer.write_position - self.bytes_written.get()
     }
 }
 
