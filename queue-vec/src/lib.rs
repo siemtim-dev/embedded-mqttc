@@ -22,6 +22,7 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
         }
     }
 
+    /// Perfroms an operation synchronously on the contained elements and returns the result.
     pub fn operate<F, O>(&self, operation: F) -> O 
         where F: FnOnce(&mut Vec<T, N>) -> O {
 
@@ -35,17 +36,15 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
         })
     }
 
+    /// Pushes an item to the vec. Waits until there is space.
     pub fn push<'a>(&'a self, item: T) -> PushFuture<'a, R, T, N> {
         PushFuture::new(self, item)
     }
 
+    /// Retains only the elemnts matching [`f`]
     pub fn retain<F>(&self, f: F) where F: FnMut(&T) -> bool{
-        self.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
-            inner.data.retain(f);
-            if ! inner.data.is_full() {
-                inner.wakers.wake();
-            }
+        self.operate(|data| {
+            data.retain(f);
         })
     }
 
