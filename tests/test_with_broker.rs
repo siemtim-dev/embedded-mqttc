@@ -3,7 +3,7 @@
 use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}, time::Duration};
 use network::std::StdNetworkConnection;
 use embassy_mqtt::{io::MqttEventLoop, ClientConfig, ClientCredentials};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use mqttrs::QoS;
 
 use test_log::test;
@@ -223,20 +223,76 @@ async fn test_broker_subscribe_unsubscribe() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(3000)]
+#[ntest::timeout(5000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
-async fn test_broker_publish_and_subscribe() {
+async fn test_broker_subscribe() {
     dotenv::dotenv().ok();
+
+    let subscribe_ready_signal = Signal::<CriticalSectionRawMutex, usize>::new();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("jhfvp3330u9efhpw22");
+    let (client, _, cancel_token) = create_sinple_client("jhfvp3330u9efhpw22", &broker_config);
+
+    let publish_future = async {
+        let topic = "test";
+        let payload = "test-payload-hjh3".as_bytes();
+
+        if ! subscribe_ready_signal.signaled() {
+            subscribe_ready_signal.wait().await; // Wait until the receiver side has subscribed
+        }
+        
+        client.publish(topic, rumqttc::QoS::AtLeastOnce, false, payload).await.unwrap();
+        client.disconnect().await.unwrap();
+        cancel_token.cancel();
+    };
+
+    let mqtt_config = broker_config.new_client_config("jjl43nn29jk");
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
     let client = event_loop.client();
 
-    let client_loop_1_future = async {
+    let client_loop_future = async {
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
+    };
+
+    let subscribe_future = async {
+        client.subscribe("test").await.unwrap();
+
+        subscribe_ready_signal.signal(0); // Signal the sender side that the subscribe is done
+
+        let publish = client.receive().await;
+        assert_eq!(&publish.topic, "test");
+        let payload = from_utf8(publish.payload.data()).unwrap();
+        assert_eq!(payload, "test-payload-hjh3");
+        client.disconnect().await;
+    };
+
+    tokio::join!(
+        client_loop_future,
+        publish_future,
+        subscribe_future
+    );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(3000)]
+#[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
+async fn test_broker_publish() {
+    dotenv::dotenv().ok();
+
+    let broker_config = BrokerConfig::from_env();
+    
+    let mqtt_config = broker_config.new_client_config("jhfvpsdgcisdgc3330u9efhpw22");
+    let event_loop = 
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
+
+    let client = event_loop.client();
+
+    let client_loop_future = async {
         let mut connection = broker_config.new_connection();
         let connection = Pin::new(&mut connection);
         event_loop.run(connection).await.unwrap();
@@ -251,30 +307,19 @@ async fn test_broker_publish_and_subscribe() {
         client.disconnect().await;
     };
 
-    let mqtt_config = broker_config.new_client_config("jjl43nn29jk");
-    let event_loop = 
-        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
-
-    let client = event_loop.client();
-
-    let client_loop_2_future = async {
-        let mut connection = broker_config.new_connection();
-        let connection = Pin::new(&mut connection);
-        event_loop.run(connection).await.unwrap();
-    };
-
+    let (client, mut receiver, cancel_token) = create_sinple_client("jjl43nn29jd9e3ed8hdho2jk", &broker_config);
     let subscribe_future = async {
-        client.subscribe("test").await.unwrap();
-        let publish = client.receive().await;
-        assert_eq!(&publish.topic, "test");
-        let payload = from_utf8(publish.payload.data()).unwrap();
-        assert_eq!(payload, "test-payload-hjh3");
-        client.disconnect().await;
+        client.subscribe("test", rumqttc::QoS::AtLeastOnce).await.unwrap();
+        let publish = receiver.recv().await.expect("there must be a publish");
+        assert_eq!(publish.topic, "test");
+        let payload_str = std::str::from_utf8(&publish.payload).unwrap();
+        assert_eq!(payload_str, "test-payload-hjh3");
+        client.disconnect().await.unwrap();
+        cancel_token.cancel();
     };
 
     tokio::join! (
-        client_loop_1_future,
-        client_loop_2_future,
+        client_loop_future,
         publish_future,
         subscribe_future
     );
