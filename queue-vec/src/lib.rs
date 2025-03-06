@@ -142,14 +142,13 @@ mod tests {
     extern crate std;
     
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-    use futures_executor::ThreadPool;
-    use futures_timer::Delay;
+    use tokio::time::sleep;
     use core::time::Duration;
     use std::sync::Arc;
 
     use crate::QueuedVec;
 
-    #[futures_test::test]
+    #[tokio::test]
     async fn test_add() {
         // let executor = ThreadPool::new().unwrap();
 
@@ -165,9 +164,8 @@ mod tests {
         });
     }
 
-    #[futures_test::test]
+    #[tokio::test]
     async fn test_wait_add() {
-        let executor = ThreadPool::new().unwrap();
 
         let q = Arc::new(QueuedVec::<CriticalSectionRawMutex, usize, 4>::new());
         let q2 = q.clone();
@@ -177,63 +175,68 @@ mod tests {
         q.push(3).await;
         q.push(4).await;
 
-        executor.spawn_ok(async move {
+        tokio::spawn(async move {
             q2.push(5).await;
         });
 
-        Delay::new(Duration::from_millis(15)).await;
+        sleep(Duration::from_millis(15)).await;
 
         q.operate(|v|{
             assert_eq!(&v[..], &[1, 2, 3, 4]);
             v.remove(0);
         });
 
-        Delay::new(Duration::from_millis(15)).await;
+        sleep(Duration::from_millis(15)).await;
         
         q.operate(|v| {
             assert_eq!(&v[..], &[2, 3, 4, 5]);
         });
     }
 
-    #[futures_test::test]
+    #[tokio::test]
     async fn test_parallelism() {
-        let executor = ThreadPool::new().unwrap();
 
         const EXPECTED: usize = 190;
 
         let q = Arc::new(QueuedVec::<CriticalSectionRawMutex, usize, 4>::new());
 
         let q1 = q.clone();
-        executor.spawn_ok(async move {
+        let jh1 = tokio::spawn(async move {
             for i in 0..10 {
                 q1.push(i * 2).await;
             }
         });
 
         let q2 = q.clone();
-        executor.spawn_ok(async move {
+        let jh2 = tokio::spawn(async move {
             for i in 0..10 {
                 q2.push(i * 2 + 1).await;
             }
         });
 
-        Delay::new(Duration::from_millis(15)).await;
+        let test_future = async {
+            sleep(Duration::from_millis(15)).await;
 
-        let mut n = 0;
+            let mut n = 0;
 
-        while q.operate(|v| {
-            match v.pop() {
-                Some(value) => {
-                    n += value;
-                    true
-                },
-                None => false,
-            }
-        }) {
-            Delay::new(Duration::from_millis(5)).await;
-        }
+            while q.operate(|v| {
+                match v.pop() {
+                    Some(value) => {
+                        n += value;
+                        true
+                    },
+                        None => false,
+                    }
+                }) {
+                    sleep(Duration::from_millis(5)).await;
+                }
 
-        assert_eq!(n, EXPECTED);
+            assert_eq!(n, EXPECTED);
+        };
+
+        let (_, r2, r3) = tokio::join!(test_future, jh1, jh2);
+        r2.unwrap();
+        r3.unwrap();
 
     }
 

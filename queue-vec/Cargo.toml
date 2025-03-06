@@ -13,9 +13,6 @@ heapless = { workspace = true }
 [dev-dependencies]
 embassy-sync = { workspace = true, features = ["std"] }
 
-futures-executor = { version = "0.3.31", features = ["thread-pool"] }
-futures-test = "0.3.31"
-futures-util = "0.3.31"
-futures-timer = "3.0.3"
+tokio = {workspace = true, features = ["macros", "tokio-macros", "time", "rt-multi-thread"] }
 
 
