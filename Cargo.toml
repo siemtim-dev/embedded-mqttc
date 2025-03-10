@@ -2,7 +2,7 @@
 name = "embassy-mqtt"
 version = "0.1.0"
 edition = "2021"
-license = "Apache 2.0"
+license = "Apache-2.0"
 
 [workspace]
 members = [
@@ -64,10 +64,10 @@ embassy-sync = { workspace = true, default-features = false, features = ["std"]}
 tokio = {workspace = true, features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
 tracing = { workspace = true }
 
-dotenv = "0.15.0"
 test-log = { version = "0.2.17", default-features = false, features = ["trace", "color"] }
 ntest = "0.9.3"
 rumqttc = "0.24.0"
 tokio-util = "0.7.13"
+dotenvy = "0.15.7"
 
 

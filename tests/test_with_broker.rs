@@ -86,7 +86,7 @@ impl BrokerConfig {
 #[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos0() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
@@ -121,7 +121,7 @@ async fn test_broker_publish_qos0() {
 #[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos1() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
@@ -156,7 +156,7 @@ async fn test_broker_publish_qos1() {
 #[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos2() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
@@ -191,7 +191,7 @@ async fn test_broker_publish_qos2() {
 #[ntest::timeout(5000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_subscribe_unsubscribe() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
@@ -226,7 +226,7 @@ async fn test_broker_subscribe_unsubscribe() {
 #[ntest::timeout(5000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_subscribe() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let subscribe_ready_signal = Signal::<CriticalSectionRawMutex, usize>::new();
 
@@ -282,7 +282,7 @@ async fn test_broker_subscribe() {
 #[ntest::timeout(3000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
@@ -330,7 +330,7 @@ async fn test_broker_publish() {
 #[ntest::timeout(6000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_auto_subscribe() {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     let auto_subscribe_topics = [ "test-autosub-1", "test-autosub-2" ];
