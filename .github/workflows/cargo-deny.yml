@@ -1,5 +1,5 @@
 name: Test Compliance
-run-name: Testing complicance on ${{ github.ref }}
+run-name: Testing complicance for commit  ${{ github.sha }}
 on: [ push, pull_request ]
 jobs:
   cargo-deny:

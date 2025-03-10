@@ -1,5 +1,5 @@
 name: Test Crate
-run-name: Testing commit ${{ github.ref }} of ${{ github.repository }}
+run-name: Testing commit ${{ github.sha }}
 on: [ push, pull_request ]
 jobs:
   test-without-broker:
@@ -9,8 +9,6 @@ jobs:
         image: eclipse-mosquitto:2.0
         ports:
           - 1883:1883
-        volumes:
-          - ./config/test:/mosquitto/config:ro
     env:
       MQTT_HOST: mosquitto
       MQTT_USER: test
