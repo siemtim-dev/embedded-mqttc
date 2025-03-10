@@ -1,0 +1,13 @@
+name: Test Crate
+run-name: Testing commit ${{ github.ref }} of ${{ github.repository }}
+on: [ push, pull_request ]
+jobs:
+  test-without-broker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+      - run: cargo test -F tracing
+
