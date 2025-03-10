@@ -111,7 +111,7 @@ checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
 
 [[package]]
 name = "buffer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "defmt",
  "embedded-io",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "embassy-mqtt"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "buffer",
  "defmt",
@@ -697,7 +697,7 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "network"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "buffer",
  "defmt",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "queue-vec"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "embassy-sync",
  "heapless",
@@ -898,9 +898,9 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "ring"
-version = "0.17.11"
+version = "0.17.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da5349ae27d3887ca812fb375b45a4fbb36d8d12d2df394968cd86e35683fe73"
+checksum = "70ac5d832aa16abd7d1def883a8545280c20a60f523a370aa3a9617c2b8550ee"
 dependencies = [
  "cc",
  "cfg-if",

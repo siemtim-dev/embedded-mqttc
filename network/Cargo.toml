@@ -1,12 +1,12 @@
 [package]
 name = "network"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
 # From workspace
-buffer = { version = "*", path = "../buffer", default-features = false, features = ["serde", "embedded"]}
+buffer = { version = "1.0.0", path = "../buffer", default-features = false, features = ["serde", "embedded"]}
 mqttrs = { workspace = true }
 thiserror = { workspace = true }
 heapless = { workspace = true }

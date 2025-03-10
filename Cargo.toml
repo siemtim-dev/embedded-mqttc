@@ -1,6 +1,6 @@
 [package]
 name = "embassy-mqtt"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -32,9 +32,9 @@ default-features = false
 
 [dependencies]
 ## From Workspace Internal 
-buffer = { version = "*", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
-queue-vec = { version = "*", default-features = false, path = "./queue-vec"}
-network = { version = "*", path = "./network", default-features = false }
+buffer = { version = "1.0.0", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
+queue-vec = { version = "1.0.0", default-features = false, path = "./queue-vec"}
+network = { version = "1.0.0", path = "./network", default-features = false }
 
 # From Workspace external
 mqttrs = { workspace = true, default-features = false }
