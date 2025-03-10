@@ -4,11 +4,24 @@ on: [ push, pull_request ]
 jobs:
   test-without-broker:
     runs-on: ubuntu-latest
+    services:
+      mosquitto:
+        image: eclipse-mosquitto:2.0
+        ports:
+          - 1883:1883
+        volumes:
+          - ./config/test/mosquitto.conf:/mosquitto/config/mosquitto.conf
+          - ./config/test/mosquitto_passwords.txt:/mosquitto/config/mosquitto_passwords.txt
+    env:
+      MQTT_HOST: mosquitto
+      MQTT_USER: test
+      MQTT_PASSWORD: test-password
+      MQTT_PORT: 1883
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
             override: true
-      - run: cargo test -F tracing
+      - run: cargo test -F tracing -F test_with_broker
 
