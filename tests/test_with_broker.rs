@@ -1,15 +1,16 @@
 
 
-use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}, time::Duration};
+use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
 use network::std::StdNetworkConnection;
-use embassy_mqtt::{io::MqttEventLoop, ClientConfig, ClientCredentials};
+use embassy_mqtt::{io::MqttEventLoop, ClientConfig, ClientCredentials, MqttEvent};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use mqttrs::QoS;
 
 use test_log::test;
 
 mod broker_common;
-use broker_common::create_sinple_client;
+use broker_common::{create_sinple_client, random_topic};
+use uuid::Uuid;
 
 const MQTT_DEFAULT_PORT: u16 = 1883;
 
@@ -83,14 +84,15 @@ impl BrokerConfig {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(3000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos0() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("ff9h01238chhz3999hf");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -103,10 +105,10 @@ async fn test_broker_publish_qos0() {
     };
 
     let test_future = async {
-        let topic = "test-hsduifhds";
+        let topic = random_topic(None);
         let payload = "test payload".as_bytes();
 
-        client.publish(topic, payload, QoS::AtMostOnce, false).await.unwrap();
+        client.publish(&topic, payload, QoS::AtMostOnce, false).await.unwrap();
     };
 
     tokio::select! {
@@ -118,14 +120,15 @@ async fn test_broker_publish_qos0() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(3000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos1() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("gzug83gh30ugd");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -138,10 +141,10 @@ async fn test_broker_publish_qos1() {
     };
 
     let test_future = async {
-        let topic = "test-ashjhkasjhdj";
+        let topic = random_topic(None);
         let payload = "test payload".as_bytes();
 
-        client.publish(topic, payload, QoS::AtLeastOnce, false).await.unwrap();
+        client.publish(&topic, payload, QoS::AtLeastOnce, false).await.unwrap();
     };
 
     tokio::select! {
@@ -153,14 +156,15 @@ async fn test_broker_publish_qos1() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(3000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish_qos2() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("dhk3a09udgwp2ih");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -173,10 +177,10 @@ async fn test_broker_publish_qos2() {
     };
 
     let test_future = async {
-        let topic = "test-hsdjkfhsdhf";
+        let topic = random_topic(None);
         let payload = "test payload".as_bytes();
 
-        client.publish(topic, payload, QoS::ExactlyOnce, false).await.unwrap();
+        client.publish(&topic, payload, QoS::ExactlyOnce, false).await.unwrap();
     };
 
     tokio::select! {
@@ -188,14 +192,15 @@ async fn test_broker_publish_qos2() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(5000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_subscribe_unsubscribe() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("jh330u9887609efhpw22");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -208,10 +213,10 @@ async fn test_broker_subscribe_unsubscribe() {
     };
 
     let test_future = async {
-        let topic = "test-jdfoifu98z";
+        let topic = random_topic(None);
 
-        client.subscribe(topic).await.unwrap();
-        client.unsubscribe(topic).await.unwrap();
+        client.subscribe(&topic).await.unwrap();
+        client.unsubscribe(&topic).await.unwrap();
         client.disconnect().await;
     };
 
@@ -223,7 +228,7 @@ async fn test_broker_subscribe_unsubscribe() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(5000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_subscribe() {
     dotenvy::dotenv().ok();
@@ -231,23 +236,25 @@ async fn test_broker_subscribe() {
     let subscribe_ready_signal = Signal::<CriticalSectionRawMutex, usize>::new();
 
     let broker_config = BrokerConfig::from_env();
+
+    let topic = random_topic(None);
     
-    let (client, _, cancel_token) = create_sinple_client("jhfvp3330u9efhpw22", &broker_config);
+    let (client, _, cancel_token) = create_sinple_client(&broker_config);
 
     let publish_future = async {
-        let topic = "test";
         let payload = "test-payload-hjh3".as_bytes();
 
         if ! subscribe_ready_signal.signaled() {
             subscribe_ready_signal.wait().await; // Wait until the receiver side has subscribed
         }
         
-        client.publish(topic, rumqttc::QoS::AtLeastOnce, false, payload).await.unwrap();
+        client.publish(&topic, rumqttc::QoS::AtLeastOnce, false, payload).await.unwrap();
         client.disconnect().await.unwrap();
         cancel_token.cancel();
     };
 
-    let mqtt_config = broker_config.new_client_config("jjl43nn29jk");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -260,12 +267,12 @@ async fn test_broker_subscribe() {
     };
 
     let subscribe_future = async {
-        client.subscribe("test").await.unwrap();
+        client.subscribe(&topic).await.unwrap();
 
         subscribe_ready_signal.signal(0); // Signal the sender side that the subscribe is done
 
         let publish = client.receive().await;
-        assert_eq!(&publish.topic, "test");
+        assert_eq!(&publish.topic[..], &topic[..]);
         let payload = from_utf8(publish.payload.data()).unwrap();
         assert_eq!(payload, "test-payload-hjh3");
         client.disconnect().await;
@@ -279,14 +286,15 @@ async fn test_broker_subscribe() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(3000)]
+#[ntest::timeout(10000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_broker_publish() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
     
-    let mqtt_config = broker_config.new_client_config("jhfvpsdgcisdgc3330u9efhpw22");
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
     let event_loop = 
         MqttEventLoop::<CriticalSectionRawMutex, 1024>::new(mqtt_config);
 
@@ -298,20 +306,21 @@ async fn test_broker_publish() {
         event_loop.run(connection).await.unwrap();
     };
 
+    let topic = random_topic(None);
+
     let publish_future = async {
-        let topic = "test";
         let payload = "test-payload-hjh3".as_bytes();
 
-        tokio::time::sleep(core::time::Duration::from_millis(100)).await;
-        client.publish(topic, payload, QoS::AtLeastOnce, false).await.unwrap();
+        tokio::time::sleep(core::time::Duration::from_millis(500)).await;
+        client.publish(&topic, payload, QoS::AtLeastOnce, false).await.unwrap();
         client.disconnect().await;
     };
 
-    let (client, mut receiver, cancel_token) = create_sinple_client("jjl43nn29jd9e3ed8hdho2jk", &broker_config);
+    let (client, mut receiver, cancel_token) = create_sinple_client(&broker_config);
     let subscribe_future = async {
-        client.subscribe("test", rumqttc::QoS::AtLeastOnce).await.unwrap();
+        client.subscribe(&topic, rumqttc::QoS::AtLeastOnce).await.unwrap();
         let publish = receiver.recv().await.expect("there must be a publish");
-        assert_eq!(publish.topic, "test");
+        assert_eq!(publish.topic, &topic[..]);
         let payload_str = std::str::from_utf8(&publish.payload).unwrap();
         assert_eq!(payload_str, "test-payload-hjh3");
         client.disconnect().await.unwrap();
@@ -327,33 +336,24 @@ async fn test_broker_publish() {
 
 
 #[test(tokio::test)]
-#[ntest::timeout(6000)]
+#[ntest::timeout(20000)]
 #[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
 async fn test_auto_subscribe() {
     dotenvy::dotenv().ok();
 
     let broker_config = BrokerConfig::from_env();
-    let auto_subscribe_topics = [ "test-autosub-1", "test-autosub-2" ];
+
+    let auto_subscribe_topics = [
+        random_topic(Some("test-autosub-1")), 
+        random_topic(Some("test-autosub-2")), 
+    ];
+
+    let topic = auto_subscribe_topics.first().unwrap();
     
-    let (client, _, cancel_token) = create_sinple_client("jjl43nhd74hd7wn29jk", &broker_config);
-
-    let publish_future = async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        client.publish("test-autosub-1", rumqttc::QoS::AtLeastOnce, false, "test-payload-hjhasdas3")
-            .await.unwrap();
-
-        if let Err(e) = client.disconnect().await {
-            tracing::error!("error disconnecting from broker: {}", e);
-        }
-
-        cancel_token.cancel();
-    };
-    
-
+    let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config_with_auto_subscribe(
-        "jhfvp3330uhcf8sj9efhpw22",
-        auto_subscribe_topics.into_iter(),
+        &client_id,
+        auto_subscribe_topics.iter().map(|s| &s[..]),
         QoS::AtLeastOnce
     );
     let event_loop = 
@@ -369,10 +369,26 @@ async fn test_auto_subscribe() {
 
     let subscribe_future = async {
         let publish = client.receive().await;
-        assert_eq!(&publish.topic, "test-autosub-1");
+        assert_eq!(&publish.topic, &topic[..]);
         let payload = from_utf8(publish.payload.data()).unwrap();
         assert_eq!(payload, "test-payload-hjhasdas3");
         client.disconnect().await;
+    };
+
+    let (publish_client, _, cancel_token) = create_sinple_client(&broker_config);
+
+    let publish_future = async {
+        client.on(|event| *event == MqttEvent::InitialSubscribesDone).await;
+        tracing::debug!("TEST: publish: stop waiting, initial subscribes done");
+
+        publish_client.publish(topic, rumqttc::QoS::AtLeastOnce, false, "test-payload-hjhasdas3")
+            .await.unwrap();
+
+        if let Err(e) = publish_client.disconnect().await {
+            tracing::error!("error disconnecting from broker: {}", e);
+        }
+
+        cancel_token.cancel();
     };
 
     tokio::join! (

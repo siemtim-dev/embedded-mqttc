@@ -69,5 +69,6 @@ ntest = "0.9.3"
 rumqttc = "0.24.0"
 tokio-util = "0.7.13"
 dotenvy = "0.15.7"
+uuid = { version = "1.15.1", features = ["v4"] }
 
 

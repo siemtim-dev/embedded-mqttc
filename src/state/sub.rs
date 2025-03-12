@@ -1,6 +1,8 @@
 
+use core::cell::RefCell;
+
 use buffer::BufferWriter;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
 use heapless::{String, Vec};
 use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
@@ -61,23 +63,26 @@ pub struct Request {
     topic: Topic,
     pid: Pid,
     external_id: UniqueID,
-    state: RequestState
+    state: RequestState,
+    initial: bool
 }
 
 impl Request {
-    pub fn subscribe(topic: Topic, pid: Pid, external_id: UniqueID, qos: QoS) -> Self {
+    fn subscribe(topic: Topic, pid: Pid, external_id: UniqueID, qos: QoS, initial: bool) -> Self {
         Self {
             topic, pid, external_id,
             request_type: RequestType::Subscribe(qos),
             state: RequestState::Initial,
+            initial
         }
     }
 
-    pub fn unsubscribe(topic: Topic, pid: Pid, external_id: UniqueID) -> Self {
+    fn unsubscribe(topic: Topic, pid: Pid, external_id: UniqueID) -> Self {
         Self {
             topic, pid, external_id,
             request_type: RequestType::Unsubscribe,
             state: RequestState::Initial,
+            initial: false // There is no initial unsubscribe
         }
     }
 
@@ -144,17 +149,19 @@ impl Request {
 
 pub(crate) struct SubQueue {
     requests: QueuedVec<CriticalSectionRawMutex, Request, MAX_CONCURRENT_REQUESTS>,
+    initial_subscriptions_pending: Mutex<CriticalSectionRawMutex, RefCell<Vec<Pid, MAX_CONCURRENT_REQUESTS>>>
 }
 
 impl SubQueue {
     pub(crate) fn new() -> Self {
         Self {
-            requests: QueuedVec::new()
+            requests: QueuedVec::new(),
+            initial_subscriptions_pending: Mutex::new(RefCell::new(Vec::new()))
         }
     }
 
     pub(crate) async fn push_subscribe(&self, topic: Topic, pid: Pid, external_id: UniqueID, qos: QoS) {
-        let req = Request::subscribe(topic, pid, external_id, qos);
+        let req = Request::subscribe(topic, pid, external_id, qos, false);
         self.requests.push(req).await;
     }
 
@@ -180,7 +187,7 @@ impl SubQueue {
 
                 let pid = pid_source();
                 let id = UniqueID::new();
-                let request = Request::subscribe(auto_subscribe.topic.clone(), pid, id, auto_subscribe.qos);
+                let request = Request::subscribe(auto_subscribe.topic.clone(), pid, id, auto_subscribe.qos, true);
 
                 requests.push(request)
                     .map_err(|_| "unexpected error: could not add auto subscribe request to queue")
@@ -207,32 +214,51 @@ impl SubQueue {
         })
     }
 
-    pub(crate) fn process_suback(&self, suback: &Suback) -> Option<MqttEvent> {
+    fn on_initial_suback(&self, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
+        self.initial_subscriptions_pending.lock(|inner|{
+            let mut inner = inner.borrow_mut();
+            inner.retain(|el| *el != pid);
+
+            if inner.is_empty() {
+                info!("initial subscribes done");
+                result.push(MqttEvent::InitialSubscribesDone).unwrap();
+            } else {
+                debug!("initial subscribe {} done, but {} remaining", pid, inner.len());
+            }
+        })
+    }
+
+    pub(crate) fn process_suback(&self, suback: &Suback) -> Vec<MqttEvent, 2> {
         self.requests.operate(|requests|{
+            let mut result = Vec::new();
 
             let op = requests.iter_mut().find(|el| el.pid == suback.pid);
 
-            let result = if let Some(request) = op {
+            if let Some(request) = op {
                 if request.request_type.is_subscribe() && request.state.is_await_ack() {
                     debug!("suback processed for packet {}", request.pid);
 
                     request.state = RequestState::Done;
 
-                    let fail = SubscribeReturnCodes::Failure;
-                    let code = suback.return_codes.first().unwrap_or(&fail);
+                    const FAIL: SubscribeReturnCodes = SubscribeReturnCodes::Failure;
+                    let code = suback.return_codes.first().unwrap_or(&FAIL);
 
                     if  let SubscribeReturnCodes::Success(qos) = code {
-                        Some(MqttEvent::SubscribeResult(request.external_id, Ok(qos.clone())))
+                        if request.initial {
+                            self.on_initial_suback(request.pid, &mut result);
+                        }
+
+                        result.push(MqttEvent::SubscribeResult(request.external_id, Ok(qos.clone()))).unwrap();
                     } else {
-                        Some(MqttEvent::SubscribeResult(request.external_id, Err(MqttError::SubscribeOrUnsubscribeFailed)))
+                        result.push(MqttEvent::SubscribeResult(request.external_id, Err(MqttError::SubscribeOrUnsubscribeFailed))).unwrap();
                     }
                 } else {
                     warn!("illegal state: received suback for packet {} but packet has state {}", request.pid, request.state);
-                    None
+                    // Add nothing to result vec
                 }
             } else {
                 warn!("received suback for packet {} but packet is unknown", suback.pid);
-                None
+                // Add nothing to result vec
             };
 
             requests.retain(|el| el.state != RequestState::Done);

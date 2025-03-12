@@ -2,9 +2,12 @@ use core::cell::RefCell;
 
 use buffer::BufferWriter;
 
+use crate::misc::AsVec;
+
 use embassy_sync::blocking_mutex;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::signal::Signal;
+use heapless::Vec;
 use mqttrs::{encode_slice, Connack, Connect, Error, Packet, Protocol};
 use pid::PidSource;
 use ping::PingState;
@@ -236,12 +239,13 @@ impl <M: RawMutex> State<M> {
     }
 
     /// Processes incoming packets
-    pub(crate) async fn process_packet(&self, p: &Packet<'_>, send_buffer: &mut impl BufferWriter, reveived_publishes: &impl AsyncSender<MqttPublish>) -> Result<Option<MqttEvent>, MqttError> {
+    pub(crate) async fn process_packet(&self, p: &Packet<'_>, send_buffer: &mut impl BufferWriter, reveived_publishes: &impl AsyncSender<MqttPublish>) -> Result<Vec<MqttEvent, 16>, MqttError> {
 
         match p {
             
             Packet::Connack(connack) => {
                 self.process_connack(connack)
+                    .map(|op| op.as_vec())
             },
             
             Packet::Publish(publish) => {
@@ -250,42 +254,42 @@ impl <M: RawMutex> State<M> {
                     reveived_publishes.send(publish).await;
                 }
 
-                Ok(None)
+                Ok(Vec::new())
             },
             
             Packet::Puback(pid) => {
                 let result = self.publishes.process_puback(pid);
-                Ok(result)
+                Ok(result.as_vec())
             },
             
             Packet::Pubrec(pid) => {
                 self.publishes.process_pubrec(pid, send_buffer)?;
-                Ok(None)
+                Ok(Vec::new())
             },
 
             Packet::Pubrel(pid) => {
                 self.received_publishes.process_pubrel(pid.clone());
-                Ok(None)
+                Ok(Vec::new())
             },
 
             Packet::Pubcomp(pid) => {
                 let result = self.publishes.process_pubcomp(pid);
-                Ok(result)
+                Ok(result.as_vec())
             },
 
             Packet::Suback(suback) => {
                 let result = self.subscribes.process_suback(suback);
-                Ok(result)
+                Ok(result.as_vec())
             },
             
             Packet::Unsuback(pid) => {
                 let result = self.subscribes.process_unsuback(pid);
-                Ok(result)
+                Ok(result.as_vec())
             },
             
             Packet::Pingresp => {
                 self.process_pingresp();
-                Ok(None)
+                Ok(Vec::new())
             },
 
             // # These Packages cannot be send Server -> Client
@@ -298,7 +302,7 @@ impl <M: RawMutex> State<M> {
 
             unexpected => {
                 error!("unexpected packet {} received from broker", unexpected.get_type());
-                Ok(None)
+                Ok(Vec::new())
             }
         }
     }
@@ -368,7 +372,7 @@ mod tests {
             operator(&packet)
         }
 
-        async fn process_packet(&mut self, packet: &Packet<'_>) -> Result<Option<MqttEvent>, MqttError>{
+        async fn process_packet(&mut self, packet: &Packet<'_>) -> Result<Vec<MqttEvent, 16>, MqttError>{
             self.state.process_packet(
                 packet, 
                 &mut self.send_buffer.create_writer(), 
@@ -455,7 +459,7 @@ mod tests {
         let event = test.process_packet(&Packet::Connack(Connack{
             session_present: false,
             code: ConnectReturnCode::Accepted
-        })).await.unwrap().expect("expected connected event");
+        })).await.unwrap().into_iter().next().expect("expected connected event");
 
         assert_eq!(MqttEvent::Connected, event);
 

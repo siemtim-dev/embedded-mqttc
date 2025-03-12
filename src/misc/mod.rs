@@ -1,71 +1,34 @@
 
-/*
-use buffer::{BufferReader, BufferWriter};
-use mqttrs::{decode_slice_with_len, encode_slice, Packet};
+use heapless::Vec;
 
-use crate::MqttError;
-
-#[derive(Debug, thiserror::Error, PartialEq, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum WritePacketError {
-    
-    #[error("not enaugh space to write packet")]
-    NotEnaughSpace,
-
-    #[error("otehr error")]
-    Other(#[from] MqttError)
-
+pub trait AsVec<T, const N: usize> {
+    fn as_vec(self) -> Vec<T, N>;
 }
 
-impl From<mqttrs::Error> for WritePacketError {
-    fn from(value: mqttrs::Error) -> Self {
-        match value {
-            mqttrs::Error::WriteZero => WritePacketError::NotEnaughSpace,
-            _ => WritePacketError::Other(MqttError::CodecError)
+impl <T, const N: usize> AsVec<T, N> for Option<T> {
+    fn as_vec(self) -> Vec<T, N> {
+        let mut v = Vec::new();
+        if let Some(el) = self {
+            unsafe{
+                v.push_unchecked(el);
+            }
         }
+
+        v
     }
 }
 
-pub trait MqttPacketWriter {
+impl <T, const N: usize, const M: usize> AsVec<T, N> for Vec<T, M> {
+    fn as_vec(self) -> Vec<T, N> {
+        let mut v = Vec::new();
 
-    fn write_packet(&mut self, packet: &Packet<'_>) -> Result<(), WritePacketError>;
-
-}
-
-impl <T> MqttPacketWriter for T where T: BufferWriter {
-    fn write_packet(&mut self, packet: &Packet<'_>) -> Result<(), WritePacketError> {
-        
-        let n = encode_slice(packet, self)
-            .map_err(|e| WritePacketError::from(e))?;
-
-        self.commit(n)
-            .expect("unexpected error result: commiting more bytes than written");
-
-        Ok(())
-    }
-}
-
-
-pub trait MqttPacketReader {
-
-    fn read_packet<'a>(&'a self) -> Result<Option<Packet<'a>>, MqttError>; 
-
-}
-
-impl <T> MqttPacketReader for T where T: BufferReader + ?Sized {
-    
-    
-    fn read_packet<'a>(&'a self) -> Result<Option<Packet<'a>>, MqttError> {
-        let result = decode_slice_with_len(self)
-            .map_err(|_| MqttError::CodecError)?;
-
-        if let Some((n, packet)) = result {
-            self.add_bytes_read(n);
-            Ok(Some(packet))
-        } else {
-            Ok(None)
+        for el in self {
+            let result = v.push(el);
+            if let Err(_) = result {
+                panic!("vec capacity too small");
+            }
         }
+
+        v
     }
 }
-
-    */

@@ -107,4 +107,15 @@ impl <'a, M: RawMutex> MqttClient<'a, M> {
         self.request_sender.send(MqttRequest::Disconnect).await;
     }
 
+    pub async fn on<F>(&self, matcher: F) where F: Fn(&MqttEvent) -> bool {
+        let mut sub = self.control_reveiver.subscriber().unwrap();
+
+        loop {
+            let event = sub.next_message_pure().await;
+            if matcher(&event) {
+                break;
+            }
+        }
+    }
+
 }

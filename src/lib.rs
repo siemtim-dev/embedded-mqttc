@@ -112,7 +112,7 @@ pub struct AutoSubscribe {
 
 #[derive(Clone)]
 pub struct ClientConfig {
-    pub client_id: String<32>,
+    pub client_id: String<128>,
     pub credentials: Option<ClientCredentials>,
     pub auto_subscribes: Vec<AutoSubscribe, MAX_CONCURRENT_REQUESTS>
 }
@@ -231,6 +231,7 @@ impl  MqttPublish {
 pub enum MqttEvent {
 
     Connected,
+    InitialSubscribesDone,
 
     PublishResult(UniqueID, Result<(), MqttError>),
     SubscribeResult(UniqueID, Result<QoS, MqttError>),

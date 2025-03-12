@@ -133,14 +133,18 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
         if let Some((len, packet)) = packet_op {
             debug!("try_package_receive(): decoded packet from recv_buffer: len = {}, kind = {}", len, packet.get_type());
             recv_buffer.add_bytes_read(len);
-            let event_option = 
+            let events = 
                 self.state.process_packet(&packet, send_buffer, &self.received_publishes).await?;
-            if let Some(event) = event_option {
-                debug!("try_package_receive(): processing packet -> MqttEvent: {}", &event);
-                self.control_sender.publisher().unwrap().publish(event).await;
+            
+            if ! events.is_empty() {
+                for event in events {
+                    debug!("try_package_receive(): processing packet -> MqttEvent: {}", &event);
+                    self.control_sender.publisher().unwrap().publish(event).await;
+                }
             } else {
                 trace!("try_package_receive(): packet processed, no MqttEvent");
             }
+
         } else {
             trace!("try_package_receive(): no complete packet in recv_buffer");
         }

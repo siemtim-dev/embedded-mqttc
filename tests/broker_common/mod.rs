@@ -1,11 +1,20 @@
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, Publish};
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+pub fn random_topic(name: Option<&str>) -> String {
+    let mut topic = Uuid::new_v4().to_string();
+    if let Some(name) = name {
+        topic.push_str("/");
+        topic.push_str(name);
+    }
 
+    topic
+}
 
-pub fn create_sinple_client(client_id: &str, config: &super::BrokerConfig) -> (AsyncClient, Receiver<Publish>, CancellationToken) {
-
+pub fn create_sinple_client(config: &super::BrokerConfig) -> (AsyncClient, Receiver<Publish>, CancellationToken) {
+    let client_id = Uuid::new_v4().to_string();
     let shutdown_token = CancellationToken::new();
 
     let (sender, receiver) = channel(32);
