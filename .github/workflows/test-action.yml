@@ -17,7 +17,9 @@ jobs:
       MQTT_PASSWORD: test-password
     steps:
       - uses: actions/checkout@v4
-      - run: cp ./config/* ${{ github.workspace }}/tmp/config/
+        with:
+          path: code
+      - run: cp ./code/config/* ${{ github.workspace }}/tmp/config/
       - uses: docker://docker
         with:
           args: docker restart mosquitto
@@ -26,3 +28,4 @@ jobs:
             toolchain: nightly
             override: true
       - run: cargo test -F tracing -F test_with_broker
+        working-directory: ./code
