@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: code
-      - run: cp -r ./code/config/test/* ${{ github.workspace }}/tmp/config/
+      - run: sudo cp -r ./code/config/test/* ${{ github.workspace }}/tmp/config/
       - uses: docker://docker
         with:
           args: docker restart mosquitto
