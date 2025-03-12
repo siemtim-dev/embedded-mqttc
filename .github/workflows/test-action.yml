@@ -4,12 +4,25 @@ on: [ push, pull_request ]
 jobs:
   test-without-broker:
     runs-on: ubuntu-latest
+    services:
+      mosquitto:
+        image: eclipse-mosquitto:2.0
+        volumes:
+          - ${{ github.workspace }}/tmp/config:/mosquitto/config
+        options: --name mosquitto
     env:
       RUST_LOG: debug
+      MQTT_HOST: localhost
+      MQTT_USER: test
+      MQTT_PASSWORD: test-password
     steps:
       - uses: actions/checkout@v4
+      - run: cp ./config/* ${{ github.workspace }}/tmp/config/
+      - uses: docker://docker
+        with:
+          args: docker restart mosquitto
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
             override: true
-      - run: cargo test -F tracing
+      - run: cargo test -F tracing -F test_with_broker
