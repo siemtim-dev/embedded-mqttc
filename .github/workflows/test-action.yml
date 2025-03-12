@@ -10,9 +10,12 @@ jobs:
         volumes:
           - ${{ github.workspace }}/tmp/config:/mosquitto/config
         options: --name mosquitto
+        ports:
+          - 1883:1883
     env:
       RUST_LOG: debug
       MQTT_HOST: localhost
+      MQTT_PORT: 1883
       MQTT_USER: test
       MQTT_PASSWORD: test-password
     steps:
