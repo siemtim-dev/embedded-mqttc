@@ -245,6 +245,7 @@ async fn test_broker_subscribe() {
         let payload = "test-payload-hjh3".as_bytes();
 
         if ! subscribe_ready_signal.signaled() {
+            tracing::trace!("TEST: wait for subscribe");
             subscribe_ready_signal.wait().await; // Wait until the receiver side has subscribed
         }
         
@@ -367,8 +368,9 @@ async fn test_auto_subscribe() {
         event_loop.run(connection).await.unwrap();
     };
 
+    let receive_message_future = client.receive();
     let subscribe_future = async {
-        let publish = client.receive().await;
+        let publish = receive_message_future.await;
         assert_eq!(&publish.topic, &topic[..]);
         let payload = from_utf8(publish.payload.data()).unwrap();
         assert_eq!(payload, "test-payload-hjhasdas3");
@@ -377,8 +379,9 @@ async fn test_auto_subscribe() {
 
     let (publish_client, _, cancel_token) = create_sinple_client(&broker_config);
 
+    let initial_auto_subscribe_success_future = client.on(|event| *event == MqttEvent::InitialSubscribesDone);
     let publish_future = async {
-        client.on(|event| *event == MqttEvent::InitialSubscribesDone).await;
+        initial_auto_subscribe_success_future.await;
         tracing::debug!("TEST: publish: stop waiting, initial subscribes done");
 
         publish_client.publish(topic, rumqttc::QoS::AtLeastOnce, false, "test-payload-hjhasdas3")
