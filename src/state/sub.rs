@@ -6,7 +6,7 @@ use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
 use heapless::{FnvIndexMap, String, Vec};
 use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
-use queue_vec::QueuedVec;
+use queue_vec::split::{QueuedVecInner, WithQueuedVecInner};
 
 use crate::{time, MqttError, MqttEvent, Topic, UniqueID};
 
@@ -147,27 +147,72 @@ impl Request {
     }
 }
 
+struct SubQueueInner {
+    requests: QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>,
+    initial_subscriptions_pending: FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>,
+}
+
+impl SubQueueInner {
+    fn on_initial_suback(initial_subscriptions_pending: &mut FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
+            
+        let initial_sub_op = initial_subscriptions_pending.get_mut(&pid);
+        if let Some(initial_sub) = initial_sub_op{
+            *initial_sub = true;
+        } else {
+            error!("on_initial_suback(): {} not in self.initial_subscriptions_pending", pid);
+            return;
+        }
+
+        let remaining = initial_subscriptions_pending.iter()
+            .filter(|el| *el.1 == false)
+            .count();
+
+        if remaining == 0 {
+            info!("initial subscribes done");
+            result.push(MqttEvent::InitialSubscribesDone).unwrap();
+        } else {
+            debug!("initial subscribe {} done, but {} remaining", pid, remaining);
+        }
+    }
+
+    fn borrow_mut<'a>(&'a mut self) -> (&'a mut QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>, &'a mut FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>) {
+        (&mut self.requests, &mut self.initial_subscriptions_pending)
+    }
+
+
+}
+
 pub(crate) struct SubQueue {
-    requests: QueuedVec<CriticalSectionRawMutex, Request, MAX_CONCURRENT_REQUESTS>,
-    initial_subscriptions_pending: Mutex<CriticalSectionRawMutex, RefCell<FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>>>,
+    inner: Mutex<CriticalSectionRawMutex, RefCell<SubQueueInner>>
+}
+
+impl WithQueuedVecInner<Request, MAX_CONCURRENT_REQUESTS> for SubQueue {
+    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>) -> O {
+        self.inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            operation(&mut inner.requests)
+        })
+    }
 }
 
 impl SubQueue {
     pub(crate) fn new() -> Self {
         Self {
-            requests: QueuedVec::new(),
-            initial_subscriptions_pending: Mutex::new(RefCell::new(FnvIndexMap::new()))
+            inner: Mutex::new(RefCell::new(SubQueueInner{
+                requests: QueuedVecInner::new(),
+                initial_subscriptions_pending: FnvIndexMap::new()
+            }))
         }
     }
 
     pub(crate) async fn push_subscribe(&self, topic: Topic, pid: Pid, external_id: UniqueID, qos: QoS) {
         let req = Request::subscribe(topic, pid, external_id, qos, false);
-        self.requests.push(req).await;
+        self.push(req).await;
     }
 
     pub(crate) async fn push_unsubscribe(&self, topic: Topic, pid: Pid, external_id: UniqueID) {
         let req = Request::unsubscribe(topic, pid, external_id);
-        self.requests.push(req).await;
+        self.push(req).await;
     }
 
     /**
@@ -175,36 +220,38 @@ impl SubQueue {
      * Current design decision: current requests are removed!
      */
     pub(super) fn add_auto_subscribes<F: FnMut() -> Pid>(&self, auto_subscribes: &[AutoSubscribe], mut pid_source: F) {
-        self.requests.operate(move |requests| {
-            if auto_subscribes.len() > requests.capacity() {
+
+        self.inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+
+            if auto_subscribes.len() > inner.requests.data.capacity() {
                 panic!("Internal logic error: number of auto subscribes must be <= subscribe request capacity.");
             }
 
             for auto_subscribe in auto_subscribes {
-                if requests.is_full() {
-                    requests.remove(0);
+                if inner.requests.data.is_full() {
+                    inner.requests.data.remove(0);
                 }
 
                 let pid = pid_source();
                 let id = UniqueID::new();
                 let request = Request::subscribe(auto_subscribe.topic.clone(), pid, id, auto_subscribe.qos, true);
 
-                requests.push(request)
+                inner.requests.data.push(request)
                     .map_err(|_| "unexpected error: could not add auto subscribe request to queue")
                     .unwrap();
 
-                self.initial_subscriptions_pending.lock(|inner|{
-                    inner.borrow_mut().insert(pid, false).unwrap();
-                });
+                inner.initial_subscriptions_pending.insert(pid, false).unwrap();
 
                 info!("added auto subscribe request to {}", &auto_subscribe.topic);
             }
+
         })
     } 
 
     /// Sends subscribe and unsubscribe
     pub(crate) fn process(&self, send_buffer: &mut impl BufferWriter) -> Result<(), MqttError> {
-        self.requests.operate(|requests|{
+        self.operate(|requests|{
 
             for request in requests.iter_mut() {
                 // TODO answer quetsion:
@@ -218,36 +265,14 @@ impl SubQueue {
         })
     }
 
-    fn on_initial_suback(&self, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
-        self.initial_subscriptions_pending.lock(|inner|{
-            let mut inner = inner.borrow_mut();
-            
-            let initial_sub_op = inner.get_mut(&pid);
-            if let Some(initial_sub) = initial_sub_op{
-                *initial_sub = true;
-            } else {
-                error!("on_initial_suback(): {} not in self.initial_subscriptions_pending", pid);
-                return;
-            }
-
-            let remaining = inner.iter()
-                .filter(|el| *el.1 == false)
-                .count();
-
-            if remaining == 0 {
-                info!("initial subscribes done");
-                result.push(MqttEvent::InitialSubscribesDone).unwrap();
-            } else {
-                debug!("initial subscribe {} done, but {} remaining", pid, remaining);
-            }
-        })
-    }
-
     pub(crate) fn process_suback(&self, suback: &Suback) -> Vec<MqttEvent, 2> {
-        self.requests.operate(|requests|{
+        self.inner.lock(|inner|{
+            let mut inner = inner.borrow_mut();
+            let (requests, initial_subscriptions_pending) = inner.borrow_mut();
+
             let mut result = Vec::new();
 
-            let op = requests.iter_mut().find(|el| el.pid == suback.pid);
+            let op = requests.data.iter_mut().find(|el| el.pid == suback.pid);
 
             if let Some(request) = op {
                 if request.request_type.is_subscribe() && request.state.is_await_ack() {
@@ -260,7 +285,7 @@ impl SubQueue {
 
                     if  let SubscribeReturnCodes::Success(qos) = code {
                         if request.initial {
-                            self.on_initial_suback(request.pid, &mut result);
+                            SubQueueInner::on_initial_suback(initial_subscriptions_pending, request.pid, &mut result);
                         }
 
                         result.push(MqttEvent::SubscribeResult(request.external_id, Ok(qos.clone()))).unwrap();
@@ -276,13 +301,13 @@ impl SubQueue {
                 // Add nothing to result vec
             };
 
-            requests.retain(|el| el.state != RequestState::Done);
+            inner.requests.data.retain(|el| el.state != RequestState::Done);
             result
         })
     }
 
     pub(crate) fn process_unsuback(&self, pid: &Pid) -> Option<MqttEvent> {
-        self.requests.operate(|requests|{
+        self.operate(|requests|{
 
             let op = requests.iter_mut().find(|el| el.pid == *pid);
 

@@ -4,7 +4,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use network::mqtt::{MqttPacketError, WriteMqttPacketMut};
 use crate::time::Instant;
 use mqttrs::{Packet, Pid, Publish, QosPid};
-use queue_vec::QueuedVec;
+use queue_vec::{split::WithQueuedVecInner, QueuedVec};
 
 use crate::{time, MqttError, MqttPublish};
 
