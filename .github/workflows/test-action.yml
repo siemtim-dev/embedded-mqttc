@@ -2,7 +2,7 @@ name: Test Crate
 run-name: Testing commit ${{ github.sha }}
 on: [ push, pull_request ]
 jobs:
-  test-without-broker:
+  test-with-broker:
     runs-on: ubuntu-latest
     services:
       mosquitto:
