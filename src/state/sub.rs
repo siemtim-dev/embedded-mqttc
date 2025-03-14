@@ -4,7 +4,7 @@ use core::cell::RefCell;
 use buffer::BufferWriter;
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
-use heapless::{String, Vec};
+use heapless::{FnvIndexMap, String, Vec};
 use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
 use queue_vec::QueuedVec;
 
@@ -149,14 +149,14 @@ impl Request {
 
 pub(crate) struct SubQueue {
     requests: QueuedVec<CriticalSectionRawMutex, Request, MAX_CONCURRENT_REQUESTS>,
-    initial_subscriptions_pending: Mutex<CriticalSectionRawMutex, RefCell<Vec<Pid, MAX_CONCURRENT_REQUESTS>>>
+    initial_subscriptions_pending: Mutex<CriticalSectionRawMutex, RefCell<FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>>>,
 }
 
 impl SubQueue {
     pub(crate) fn new() -> Self {
         Self {
             requests: QueuedVec::new(),
-            initial_subscriptions_pending: Mutex::new(RefCell::new(Vec::new()))
+            initial_subscriptions_pending: Mutex::new(RefCell::new(FnvIndexMap::new()))
         }
     }
 
@@ -193,6 +193,10 @@ impl SubQueue {
                     .map_err(|_| "unexpected error: could not add auto subscribe request to queue")
                     .unwrap();
 
+                self.initial_subscriptions_pending.lock(|inner|{
+                    inner.borrow_mut().insert(pid, false).unwrap();
+                });
+
                 info!("added auto subscribe request to {}", &auto_subscribe.topic);
             }
         })
@@ -217,13 +221,24 @@ impl SubQueue {
     fn on_initial_suback(&self, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
         self.initial_subscriptions_pending.lock(|inner|{
             let mut inner = inner.borrow_mut();
-            inner.retain(|el| *el != pid);
+            
+            let initial_sub_op = inner.get_mut(&pid);
+            if let Some(initial_sub) = initial_sub_op{
+                *initial_sub = true;
+            } else {
+                error!("on_initial_suback(): {} not in self.initial_subscriptions_pending", pid);
+                return;
+            }
 
-            if inner.is_empty() {
+            let remaining = inner.iter()
+                .filter(|el| *el.1 == false)
+                .count();
+
+            if remaining == 0 {
                 info!("initial subscribes done");
                 result.push(MqttEvent::InitialSubscribesDone).unwrap();
             } else {
-                debug!("initial subscribe {} done, but {} remaining", pid, inner.len());
+                debug!("initial subscribe {} done, but {} remaining", pid, remaining);
             }
         })
     }
