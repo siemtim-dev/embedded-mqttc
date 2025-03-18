@@ -1,5 +1,6 @@
 
 use core::future::Future;
+use core::marker::PhantomData;
 use core::{pin::Pin, task::{Context, Poll}};
 
 use embassy_sync::waitqueue::MultiWakerRegistration;
@@ -7,12 +8,16 @@ use heapless::Vec;
 
 use crate::MAX_WAKERS;
 
-pub trait WithQueuedVecInner<T: 'static, const N: usize> {
-    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<T, N>) -> O;
+pub trait WithQueuedVecInner<A: 'static, T: 'static, const N: usize> {
+    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<A, T, N>) -> O;
 
     /// Pushes an item to the vec. Waits until there is space.
-    fn push<'a>(&'a self, item: T) -> PushFuture<'a, Self, T, N> {
+    fn push<'a>(&'a self, item: T) -> PushFuture<'a, Self, A, T, N> {
         PushFuture::new(self, item)
+    }
+
+    fn try_push(&self, item: T) -> Result<(), T> {
+        self.with_queued_vec_inner(|inner| inner.try_push(item))
     }
 
     /// Perfroms an operation synchronously on the contained elements and returns the result.
@@ -37,23 +42,25 @@ pub trait WithQueuedVecInner<T: 'static, const N: usize> {
 }
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct PushFuture<'a, I: WithQueuedVecInner<T, N> + ?Sized, T: 'static, const N: usize> {
+pub struct PushFuture<'a, I: WithQueuedVecInner<A, T, N> + ?Sized, A: 'static, T: 'static, const N: usize> {
     queue: &'a I,
-    item: Option<T>
+    item: Option<T>,
+    _phantom_data: PhantomData<A>
 }
 
-impl <'a, I: WithQueuedVecInner<T, N> + ?Sized, T: 'static, const N: usize> PushFuture<'a, I, T, N> {
+impl <'a, I: WithQueuedVecInner<A, T, N> + ?Sized, A: 'static, T: 'static, const N: usize> PushFuture<'a, I, A, T, N> {
     fn new(queue: &'a I, item: T) -> Self {
         Self {
             queue,
-            item: Some(item)
+            item: Some(item),
+            _phantom_data: PhantomData
         }
     }
 }
 
-impl <'a, I: WithQueuedVecInner<T, N> + ?Sized, T: 'static, const N: usize> Unpin for PushFuture<'a, I, T, N> {}
+impl <'a, I: WithQueuedVecInner<A, T, N> + ?Sized, A: 'static, T: 'static, const N: usize> Unpin for PushFuture<'a, I, A, T, N> {}
 
-impl <'a, I: WithQueuedVecInner<T, N> + ?Sized, T: 'static, const N: usize> Future for PushFuture<'a, I, T, N> {
+impl <'a, I: WithQueuedVecInner<A, T, N> + ?Sized, A: 'static, T: 'static, const N: usize> Future for PushFuture<'a, I, A, T, N> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -63,18 +70,37 @@ impl <'a, I: WithQueuedVecInner<T, N> + ?Sized, T: 'static, const N: usize> Futu
     }
 }
 
-pub struct QueuedVecInner<T: 'static, const N: usize> {
-    pub(crate) wakers: MultiWakerRegistration<MAX_WAKERS>,
-    pub data: Vec<T, N>
+pub struct WorkingCopy<'a, T, const N: usize> {
+    pub data: &'a mut Vec<T, N>,
+    wakers: &'a mut MultiWakerRegistration<MAX_WAKERS>,
+}
+
+impl <'a, T, const N: usize> Drop for WorkingCopy<'a, T, N> {
+    fn drop(&mut self) {
+        if ! self.data.is_full() {
+            self.wakers.wake();
+        }
+    }
+}
+
+pub struct QueuedVecInner<A: 'static, T: 'static, const N: usize> {
+    wakers: MultiWakerRegistration<MAX_WAKERS>,
+    data: Vec<T, N>,
+    additional_data: A
 
 }
 
-impl <T: 'static, const N: usize> QueuedVecInner<T, N> {
-    pub fn new() -> Self {
+impl <A, T: 'static, const N: usize> QueuedVecInner<A, T, N> {
+    pub fn new(additional_data: A) -> Self {
         Self {
             wakers: MultiWakerRegistration::new(),
-            data: Vec::new()
+            data: Vec::new(),
+            additional_data
         }
+    }
+
+    pub fn working_copy<'a>(&'a mut self) -> ( WorkingCopy<'a, T, N>, &'a mut A ){
+        (WorkingCopy { data: &mut self.data, wakers: &mut self.wakers }, &mut self.additional_data)
     }
 
     pub fn poll_push(&mut self, item: &mut Option<T>, cx: &mut Context<'_>) -> Poll<()>{
@@ -92,6 +118,10 @@ impl <T: 'static, const N: usize> QueuedVecInner<T, N> {
             Poll::Ready(())
         }
     }
+
+    pub fn try_push(&mut self, item: T) -> Result<(), T> {
+        self.data.push(item)
+    }
 }
 
 #[cfg(test)]
@@ -105,20 +135,20 @@ mod tests {
 
     use super::{QueuedVecInner, WithQueuedVecInner};
 
-    struct TestQueuedVec <T: 'static, const N: usize> {
-        inner: Mutex<CriticalSectionRawMutex, RefCell<QueuedVecInner<T, N>>>
+    struct TestQueuedVec <A: 'static, T: 'static, const N: usize> {
+        inner: Mutex<CriticalSectionRawMutex, RefCell<QueuedVecInner<A, T, N>>>
     }
 
-    impl <T: 'static, const N: usize> TestQueuedVec <T, N> {
-        fn new() -> Self {
+    impl <A: 'static, T: 'static, const N: usize> TestQueuedVec <A, T, N> {
+        fn new(additional_data: A) -> Self {
             Self {
-                inner: Mutex::new(RefCell::new(QueuedVecInner::new()))
+                inner: Mutex::new(RefCell::new(QueuedVecInner::new(additional_data)))
             }
         }
     }
 
-    impl <T: 'static, const N: usize> WithQueuedVecInner<T, N> for TestQueuedVec <T, N> {
-        fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<T, N>) -> O {
+    impl <A: 'static, T: 'static, const N: usize> WithQueuedVecInner<A, T, N> for TestQueuedVec <A, T, N> {
+        fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<A, T, N>) -> O {
             self.inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();
                 operation(&mut inner)
@@ -132,7 +162,7 @@ mod tests {
     async fn test_add() {
         // let executor = ThreadPool::new().unwrap();
 
-        let q = TestQueuedVec::<usize, 4>::new();
+        let q = TestQueuedVec::<(), usize, 4>::new(());
 
         q.push(1).await;
         q.push(2).await;
@@ -147,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn test_wait_add() {
 
-        let q = Arc::new(TestQueuedVec::<usize, 4>::new());
+        let q = Arc::new(TestQueuedVec::<(), usize, 4>::new(()));
         let q2 = q.clone();
         
         q.push(1).await;
@@ -178,7 +208,7 @@ mod tests {
 
         const EXPECTED: usize = 190;
 
-        let q = Arc::new(TestQueuedVec::<usize, 4>::new());
+        let q = Arc::new(TestQueuedVec::<(), usize, 4>::new(()));
 
         let q1 = q.clone();
         let jh1 = tokio::spawn(async move {

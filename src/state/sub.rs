@@ -147,15 +147,21 @@ impl Request {
     }
 }
 
-struct SubQueueInner {
-    requests: QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>,
+struct InitialSubscribes {
     initial_subscriptions_pending: FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>,
 }
 
-impl SubQueueInner {
-    fn on_initial_suback(initial_subscriptions_pending: &mut FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
+impl InitialSubscribes {
+
+    fn new() -> Self {
+        Self { 
+            initial_subscriptions_pending: FnvIndexMap::new()
+        }
+    }
+
+    fn on_initial_suback(&mut self, pid: Pid, result: &mut Vec<MqttEvent, 2>) {
             
-        let initial_sub_op = initial_subscriptions_pending.get_mut(&pid);
+        let initial_sub_op = self.initial_subscriptions_pending.get_mut(&pid);
         if let Some(initial_sub) = initial_sub_op{
             *initial_sub = true;
         } else {
@@ -163,7 +169,7 @@ impl SubQueueInner {
             return;
         }
 
-        let remaining = initial_subscriptions_pending.iter()
+        let remaining = self.initial_subscriptions_pending.iter()
             .filter(|el| *el.1 == false)
             .count();
 
@@ -175,22 +181,17 @@ impl SubQueueInner {
         }
     }
 
-    fn borrow_mut<'a>(&'a mut self) -> (&'a mut QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>, &'a mut FnvIndexMap<Pid, bool, MAX_CONCURRENT_REQUESTS>) {
-        (&mut self.requests, &mut self.initial_subscriptions_pending)
-    }
-
-
 }
 
 pub(crate) struct SubQueue {
-    inner: Mutex<CriticalSectionRawMutex, RefCell<SubQueueInner>>
+    inner: Mutex<CriticalSectionRawMutex, RefCell<QueuedVecInner<InitialSubscribes, Request, MAX_CONCURRENT_REQUESTS>>>
 }
 
-impl WithQueuedVecInner<Request, MAX_CONCURRENT_REQUESTS> for SubQueue {
-    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<Request, MAX_CONCURRENT_REQUESTS>) -> O {
+impl WithQueuedVecInner<InitialSubscribes, Request, MAX_CONCURRENT_REQUESTS> for SubQueue {
+    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<InitialSubscribes, Request, MAX_CONCURRENT_REQUESTS>) -> O {
         self.inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
-            operation(&mut inner.requests)
+            operation(&mut inner)
         })
     }
 }
@@ -198,10 +199,7 @@ impl WithQueuedVecInner<Request, MAX_CONCURRENT_REQUESTS> for SubQueue {
 impl SubQueue {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Mutex::new(RefCell::new(SubQueueInner{
-                requests: QueuedVecInner::new(),
-                initial_subscriptions_pending: FnvIndexMap::new()
-            }))
+            inner: Mutex::new(RefCell::new(QueuedVecInner::new(InitialSubscribes::new())))
         }
     }
 
@@ -223,29 +221,29 @@ impl SubQueue {
 
         self.inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
+            let (requests, initial_subscribes) = inner.working_copy();
 
-            if auto_subscribes.len() > inner.requests.data.capacity() {
+            if auto_subscribes.len() > requests.data.capacity() {
                 panic!("Internal logic error: number of auto subscribes must be <= subscribe request capacity.");
             }
 
             for auto_subscribe in auto_subscribes {
-                if inner.requests.data.is_full() {
-                    inner.requests.data.remove(0);
+                if requests.data.is_full() {
+                    requests.data.remove(0);
                 }
 
                 let pid = pid_source();
                 let id = UniqueID::new();
                 let request = Request::subscribe(auto_subscribe.topic.clone(), pid, id, auto_subscribe.qos, true);
 
-                inner.requests.data.push(request)
+                requests.data.push(request)
                     .map_err(|_| "unexpected error: could not add auto subscribe request to queue")
                     .unwrap();
 
-                inner.initial_subscriptions_pending.insert(pid, false).unwrap();
+                initial_subscribes.initial_subscriptions_pending.insert(pid, false).unwrap();
 
                 info!("added auto subscribe request to {}", &auto_subscribe.topic);
             }
-
         })
     } 
 
@@ -268,7 +266,7 @@ impl SubQueue {
     pub(crate) fn process_suback(&self, suback: &Suback) -> Vec<MqttEvent, 2> {
         self.inner.lock(|inner|{
             let mut inner = inner.borrow_mut();
-            let (requests, initial_subscriptions_pending) = inner.borrow_mut();
+            let (requests, initial_subscriptions) = inner.working_copy();
 
             let mut result = Vec::new();
 
@@ -285,7 +283,7 @@ impl SubQueue {
 
                     if  let SubscribeReturnCodes::Success(qos) = code {
                         if request.initial {
-                            SubQueueInner::on_initial_suback(initial_subscriptions_pending, request.pid, &mut result);
+                            initial_subscriptions.on_initial_suback(request.pid, &mut result);
                         }
 
                         result.push(MqttEvent::SubscribeResult(request.external_id, Ok(qos.clone()))).unwrap();
@@ -301,7 +299,7 @@ impl SubQueue {
                 // Add nothing to result vec
             };
 
-            inner.requests.data.retain(|el| el.state != RequestState::Done);
+            requests.data.retain(|el| el.state != RequestState::Done);
             result
         })
     }

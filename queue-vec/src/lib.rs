@@ -11,11 +11,11 @@ pub mod split;
 pub const MAX_WAKERS: usize = 4;
 
 pub struct QueuedVec<R: RawMutex, T: 'static, const N: usize> {
-    inner: Mutex<R, RefCell<QueuedVecInner<T, N>>>
+    inner: Mutex<R, RefCell<QueuedVecInner<(), T, N>>>
 }
 
-impl <R: RawMutex, T: 'static, const N: usize> WithQueuedVecInner<T, N> for QueuedVec<R, T, N> {
-    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<T, N>) -> O {
+impl <R: RawMutex, T: 'static, const N: usize> WithQueuedVecInner<(), T, N> for QueuedVec<R, T, N> {
+    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<(), T, N>) -> O {
         self.inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
             operation(&mut inner)
@@ -27,7 +27,7 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
 
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RefCell::new(QueuedVecInner::new()))
+            inner: Mutex::new(RefCell::new(QueuedVecInner::new(())))
         }
     }
 
@@ -51,18 +51,9 @@ impl <'a, R: RawMutex, T: 'static, F: FnMut(&T) -> bool, const N: usize> Iterato
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        /* self.q.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
-
-            for i in 0..inner.data.len() {
-                if (self.remove_where)(&inner.data[i]) {
-                    return Some(inner.data.remove(i))
-                }
-            }
-            None
-        }) */
 
        self.q.with_queued_vec_inner(|inner|{
+            let (inner, _) = inner.working_copy();
             for i in 0..inner.data.len() {
                 if (self.remove_where)(&inner.data[i]) {
                     return Some(inner.data.remove(i))
