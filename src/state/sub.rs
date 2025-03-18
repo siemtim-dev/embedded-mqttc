@@ -333,5 +333,208 @@ impl SubQueue {
 
 #[cfg(test)]
 mod tests {
+    use buffer::{new_stack_buffer, ReadWrite};
+    use heapless::Vec;
+    use mqttrs::{Packet, Pid, QoS, Suback, SubscribeReturnCodes};
+    use network::mqtt::ReadMqttPacket;
+
+    use crate::{state::{pid::PidSource, sub::SubQueue}, AutoSubscribe, MqttEvent, Topic, UniqueID};
+
+
+    #[tokio::test]
+    #[ntest::timeout(5000)]
+    async fn test_subscribe () {
+
+        let subs = SubQueue::new();
+
+        let mut send_buffer = new_stack_buffer::<1024>();
+
+        {
+            let mut writer = send_buffer.create_writer();
+            subs.process(&mut writer).unwrap();
+        }
+
+        assert_eq!(send_buffer.remaining_len(), 0);
+        let pid = Pid::new() + 16;
+
+        {
+            let mut topic = Topic::new();
+            topic.push_str("test/a/topic").unwrap();
+            subs.push_subscribe(topic, pid, UniqueID(5), QoS::AtMostOnce).await;
+        }
+
+        {
+            let mut writer = send_buffer.create_writer();
+            subs.process(&mut writer).unwrap();
+        }
+
+        {
+            let reader = send_buffer.create_reader();
+            let p = reader.read_packet().unwrap()
+                .expect("expected a subscribe packet but got none");
+            if let Packet::Subscribe(s) = p {
+                assert_eq!(&s.topics[0].topic_path[..], "test/a/topic");
+                assert_eq!(s.pid, pid);
+                assert_eq!(s.topics[0].qos, QoS::AtMostOnce);
+            } else {
+                panic!("expected subscribe packet");
+            }
+        }
+
+    }
+
+    #[tokio::test]
+    #[ntest::timeout(5000)]
+    async fn test_auto_subscribe () {
+
+        let subs = SubQueue::new();
+        let mut send_buffer = new_stack_buffer::<1024>();
+
+        let pid = Pid::new() + 16;
+        let auto_subscribes = [
+            AutoSubscribe::new("some/default/topic", QoS::ExactlyOnce)
+        ];
+        subs.add_auto_subscribes(&auto_subscribes, || pid);
+
+        {
+            let mut writer = send_buffer.create_writer();
+            subs.process(&mut writer).unwrap();
+        }
+
+        {
+            let reader = send_buffer.create_reader();
+            let p = reader.read_packet().unwrap()
+                .expect("expected a subscribe packet but got none");
+            if let Packet::Subscribe(s) = p {
+                assert_eq!(&s.topics[0].topic_path[..], "some/default/topic");
+                assert_eq!(s.pid, pid);
+                assert_eq!(s.topics[0].qos, QoS::ExactlyOnce);
+            } else {
+                panic!("expected subscribe packet");
+            }
+        }
+
+        {
+            let mut suback = Suback{
+                pid,
+                return_codes: Vec::new()
+            };
+            suback.return_codes.push(SubscribeReturnCodes::Success(QoS::ExactlyOnce)).unwrap();
+            let events = subs.process_suback(&suback);
+
+            assert_eq!(events.len(), 2);
+            let mut found_subscription_result = false;
+            let mut found_initial_subscriptions_done = false;
+            
+            for event in events {
+                if let MqttEvent::SubscribeResult(_, res) = event {
+                    let qos = res.unwrap();
+                    assert_eq!(qos, QoS::ExactlyOnce);
+                    found_subscription_result = true;
+                } else if let MqttEvent::InitialSubscribesDone = event {
+                    found_initial_subscriptions_done = true;
+                } else {
+                    panic!("unexpected event: {:?}", event);
+                }
+            }
+
+            assert!(found_subscription_result);
+            assert!(found_initial_subscriptions_done);
+        }
+    }
+
+
+    #[tokio::test]
+    #[ntest::timeout(5000)]
+    async fn test_multi_auto_subscribe () {
+
+        let subs = SubQueue::new();
+        let mut send_buffer = new_stack_buffer::<1024>();
+        let pid_src = PidSource::new();
+
+        let auto_subscribes = [
+            AutoSubscribe::new("some/default/topic/1", QoS::ExactlyOnce),
+            AutoSubscribe::new("some/default/topic/2", QoS::AtLeastOnce)
+        ];
+        subs.add_auto_subscribes(&auto_subscribes, || pid_src.next_pid());
+
+        {
+            let mut writer = send_buffer.create_writer();
+            subs.process(&mut writer).unwrap();
+        }
+
+        let mut pid_1 = None;
+        let mut pid_2 = None;
+
+        for _ in 0..2 {
+            let reader = send_buffer.create_reader();
+            let p = reader.read_packet().unwrap()
+                .expect("expected a subscribe packet but got none");
+            if let Packet::Subscribe(s) = p {
+                if &s.topics[0].topic_path[..] == "some/default/topic/1" {
+                    pid_1 = Some(s.pid);
+                    assert_eq!(s.topics[0].qos, QoS::ExactlyOnce);
+                } else if &s.topics[0].topic_path[..] == "some/default/topic/2" {
+                    pid_2 = Some(s.pid);
+                    assert_eq!(s.topics[0].qos, QoS::AtLeastOnce);
+                } else {
+                    panic!("unexpected subscribe to topic {}", &s.topics[0].topic_path[..]);
+                }
+            } else {
+                panic!("expected subscribe packet");
+            }
+        }
+
+        assert!(pid_1.is_some());
+        assert!(pid_2.is_some());
+
+        {
+            let mut suback = Suback{
+                pid: pid_1.unwrap(),
+                return_codes: Vec::new()
+            };
+            suback.return_codes.push(SubscribeReturnCodes::Success(QoS::ExactlyOnce)).unwrap();
+            let events = subs.process_suback(&suback);
+
+            assert_eq!(events.len(), 1);
+            let event = events.first().unwrap();
+
+            if let MqttEvent::SubscribeResult(_, res) = event {
+                let qos = res.as_ref().unwrap();
+                assert_eq!(*qos, QoS::ExactlyOnce);
+            } else {
+                panic!("expectes subscribe result");
+            }
+        }
+
+        {
+            let mut suback = Suback{
+                pid: pid_2.unwrap(),
+                return_codes: Vec::new()
+            };
+            suback.return_codes.push(SubscribeReturnCodes::Success(QoS::AtLeastOnce)).unwrap();
+            let events = subs.process_suback(&suback);
+
+            assert_eq!(events.len(), 2);
+            let mut found_subscription_result = false;
+            let mut found_initial_subscriptions_done = false;
+            
+            for event in events {
+                if let MqttEvent::SubscribeResult(_, res) = event {
+                    let qos = res.unwrap();
+                    assert_eq!(qos, QoS::AtLeastOnce);
+                    found_subscription_result = true;
+                } else if let MqttEvent::InitialSubscribesDone = event {
+                    found_initial_subscriptions_done = true;
+                } else {
+                    panic!("unexpected event: {:?}", event);
+                }
+            }
+
+            assert!(found_subscription_result);
+            assert!(found_initial_subscriptions_done);
+        }
+    }
+
     
 }

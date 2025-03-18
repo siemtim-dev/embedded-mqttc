@@ -110,6 +110,17 @@ pub struct AutoSubscribe {
     pub qos: QoS
 }
 
+impl AutoSubscribe {
+    pub fn new(topic: &str, qos: QoS) -> Self {
+        let mut this = Self {
+            topic: Topic::new(),
+            qos
+        };
+        this.topic.push_str(topic).unwrap();
+        this
+    }
+}
+
 #[derive(Clone)]
 pub struct ClientConfig {
     pub client_id: String<128>,
