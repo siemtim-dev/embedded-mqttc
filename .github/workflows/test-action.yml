@@ -2,14 +2,33 @@ name: Test Crate
 run-name: Testing commit ${{ github.sha }}
 on: [ push, pull_request ]
 jobs:
-  test-without-broker:
+  test-with-broker:
     runs-on: ubuntu-latest
+    services:
+      mosquitto:
+        image: eclipse-mosquitto:2.0
+        volumes:
+          - ${{ github.workspace }}/tmp/config:/mosquitto/config
+        options: --name mosquitto
+        ports:
+          - 1883:1883
     env:
-      RUST_LOG: debug
+      RUST_LOG: trace
+      MQTT_HOST: localhost
+      MQTT_PORT: 1883
+      MQTT_USER: test
+      MQTT_PASSWORD: test-password
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: code
+      - run: sudo cp -r ./code/config/test/* ${{ github.workspace }}/tmp/config/
+      - uses: docker://docker
+        with:
+          args: docker restart mosquitto
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
             override: true
-      - run: cargo test -F tracing
+      - run: cargo test -F tracing -F test_with_broker
+        working-directory: ./code

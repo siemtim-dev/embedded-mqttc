@@ -90,9 +90,7 @@ ignore = [
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
 allow = [
     "MIT",
-    "Apache-2.0",
-    "0BSD",
-    #"Apache-2.0 WITH LLVM-exception",
+    "Apache-2.0"
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the
@@ -103,7 +101,9 @@ confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
-    { crate = "unicode-ident", allow = [ "Unicode-3.0" ] }
+    { crate = "unicode-ident", allow = [ "Unicode-3.0" ] },
+    { crate = "smoltcp", allow = [ "0BSD" ] },
+    { crate = "managed", allow = [ "0BSD" ] }
 ]
 
 # Some crates don't have (easily) machine readable licensing information,

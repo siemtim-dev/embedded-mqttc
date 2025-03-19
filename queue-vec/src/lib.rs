@@ -2,50 +2,33 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::cell::RefCell;
-use core::future::Future;
-use core::{pin::Pin, task::{Context, Poll}};
 
-use embassy_sync::{blocking_mutex::{raw::RawMutex, Mutex}, waitqueue::MultiWakerRegistration};
-use heapless::Vec;
+use embassy_sync::blocking_mutex::{raw::RawMutex, Mutex};
+use split::{QueuedVecInner, WithQueuedVecInner};
+
+pub mod split;
 
 pub const MAX_WAKERS: usize = 4;
 
 pub struct QueuedVec<R: RawMutex, T: 'static, const N: usize> {
-    inner: Mutex<R, RefCell<Inner<T, N>>>
+    inner: Mutex<R, RefCell<QueuedVecInner<(), T, N>>>
+}
+
+impl <R: RawMutex, T: 'static, const N: usize> WithQueuedVecInner<(), T, N> for QueuedVec<R, T, N> {
+    fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<(), T, N>) -> O {
+        self.inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            operation(&mut inner)
+        })
+    }
 }
 
 impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
 
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RefCell::new(Inner::new()))
+            inner: Mutex::new(RefCell::new(QueuedVecInner::new(())))
         }
-    }
-
-    /// Perfroms an operation synchronously on the contained elements and returns the result.
-    pub fn operate<F, O>(&self, operation: F) -> O 
-        where F: FnOnce(&mut Vec<T, N>) -> O {
-
-        self.inner.lock(|inner|{
-            let mut inner = inner.borrow_mut();
-            let result = operation(&mut inner.data);
-            if ! inner.data.is_full() {
-                inner.wakers.wake();
-            }
-            result
-        })
-    }
-
-    /// Pushes an item to the vec. Waits until there is space.
-    pub fn push<'a>(&'a self, item: T) -> PushFuture<'a, R, T, N> {
-        PushFuture::new(self, item)
-    }
-
-    /// Retains only the elemnts matching [`f`]
-    pub fn retain<F>(&self, f: F) where F: FnMut(&T) -> bool{
-        self.operate(|data| {
-            data.retain(f);
-        })
     }
 
     /// Remove all elements from the queue which satisfy the remove_where function.
@@ -59,62 +42,6 @@ impl <R: RawMutex, T: 'static, const N: usize> QueuedVec<R, T, N> {
 
 }
 
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct PushFuture<'a, R: RawMutex, T: 'static, const N: usize> {
-    queue: &'a QueuedVec<R, T, N>,
-    item: Option<T>
-}
-
-impl <'a, R: RawMutex, T, const N: usize> PushFuture<'a, R, T, N> {
-    fn new(queue: &'a QueuedVec<R, T, N>, item: T) -> Self {
-        Self {
-            queue,
-            item: Some(item)
-        }
-    }
-}
-
-impl <'a, R: RawMutex, T: 'static, const N: usize> Unpin for PushFuture<'a, R, T, N> {}
-
-impl <'a, R: RawMutex, T: 'static, const N: usize> Future for PushFuture<'a, R, T, N> {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.queue.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
-
-            if inner.data.is_full() {
-                inner.wakers.register(cx.waker());
-                Poll::Pending
-            } else {
-                let item = self.item.take()
-                    .ok_or("Illegal State: poll() called but item to add is not present")
-                    .unwrap();
-                inner.data.push(item)
-                    .map_err(|_| "Err: checkt if data is bull, but push failed").unwrap();
-
-                Poll::Ready(())
-            }
-        })
-    }
-}
-
-struct Inner<T: 'static, const N: usize> {
-    wakers: MultiWakerRegistration<MAX_WAKERS>,
-
-    data: Vec<T, N>
-
-}
-
-impl <T: 'static, const N: usize> Inner<T, N> {
-    pub fn new() -> Self {
-        Self {
-            wakers: MultiWakerRegistration::new(),
-            data: Vec::new()
-        }
-    }
-}
-
 pub struct RemoveIterator <'a, R: RawMutex, T: 'static, F: FnMut(&T) -> bool, const N: usize>{
     q: &'a QueuedVec<R, T, N>,
     remove_where: F
@@ -124,16 +51,16 @@ impl <'a, R: RawMutex, T: 'static, F: FnMut(&T) -> bool, const N: usize> Iterato
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.q.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
 
+       self.q.with_queued_vec_inner(|inner|{
+            let (inner, _) = inner.working_copy();
             for i in 0..inner.data.len() {
                 if (self.remove_where)(&inner.data[i]) {
                     return Some(inner.data.remove(i))
                 }
             }
             None
-        })
+       })
     }
 }
 
@@ -146,7 +73,7 @@ mod tests {
     use core::time::Duration;
     use std::sync::Arc;
 
-    use crate::QueuedVec;
+    use crate::{split::WithQueuedVecInner, QueuedVec};
 
     #[tokio::test]
     async fn test_add() {
