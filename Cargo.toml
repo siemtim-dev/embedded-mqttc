@@ -1,10 +1,10 @@
 [package]
-name = "embassy-mqtt"
+name = "embedded-mqtt"
 description = "A simple MQTT client designed for use with embassy"
 version = "1.0.0"
 edition = "2021"
-repository = "https://github.com/siemtim-dev/embassy-mqtt"
-homepage = "https://github.com/siemtim-dev/embassy-mqtt"
+repository = "https://github.com/siemtim-dev/embedded-mqtt"
+homepage = "https://github.com/siemtim-dev/embedded-mqtt"
 readme = "README.md"
 
 license = "Apache-2.0"

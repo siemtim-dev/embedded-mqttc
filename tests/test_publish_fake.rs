@@ -6,7 +6,7 @@ use network::{fake::{new_connection, ClientConnection, ConnectionRessources, Rea
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_io_async::Read;
 use mqttrs::{decode_slice, Connack, ConnectReturnCode, Packet, PacketType, QoS};
-use embassy_mqtt::{client::MqttClient, io::MqttEventLoop, ClientConfig, ClientCredentials};
+use embedded_mqtt::{client::MqttClient, io::MqttEventLoop, ClientConfig, ClientCredentials};
 use heapless::Vec;
 
 struct Test <'a, const N: usize> {
