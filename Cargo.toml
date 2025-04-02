@@ -25,7 +25,7 @@ embassy-sync = { version = "0.6.2", default-features = false }
 embassy-futures = { version = "^0.1.1", default-features = false }
 
 defmt = { version = "0.3.10" }
-tokio = { version = "1.43.0",  features = ["macros", "time", "io-util", "net"] }
+tokio = { version = "1.43.0",  features = ["macros", "time", "io-util", "net", "rt"] }
 tracing = { version = "0.1.41" }
 
 embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false }
@@ -76,5 +76,7 @@ rumqttc = "0.24.0"
 tokio-util = "0.7.13"
 dotenvy = "0.15.7"
 uuid = { version = "1.15.1", features = ["v4"] }
+mqttest = "0.2.0"
+tracing-log = "0.2.0"
 
 
