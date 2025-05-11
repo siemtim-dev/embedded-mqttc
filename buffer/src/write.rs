@@ -30,7 +30,9 @@ impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> BufferWriter for Write<'a, T> {
         if self.remaining_capacity() < n {
             Err(BufferError::NoCapacity)
         } else {
-            self.bytes_written.update(|old_value| old_value + n);
+            self.bytes_written.set(
+                self.bytes_written.get() + n
+            );
             Ok(())
         }
     }

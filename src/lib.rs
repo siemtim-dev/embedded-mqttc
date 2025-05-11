@@ -1,6 +1,3 @@
-
-#![feature(never_type)]
-
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{cell::Cell, ops::Deref};

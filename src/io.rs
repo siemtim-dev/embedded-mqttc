@@ -1,3 +1,4 @@
+use core::convert::Infallible;
 use core::{cell::RefCell, future::Future, pin::Pin};
 
 use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
@@ -156,7 +157,7 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
     /// First tries to write outgoing traffic to buffer
     /// Then tries to read / write to / from the connection
     /// Then read data from receive buffer
-    async fn work_network<N: NetworkConnection>(&self, connection: &mut N) -> Result<!, MqttError> {
+    async fn work_network<N: NetworkConnection>(&self, connection: &mut N) -> Result<Infallible, MqttError> {
         loop {
             // Try to send packets first before blocking for network traffic
             // Send packets (Ping, Connect, Publish)

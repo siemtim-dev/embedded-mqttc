@@ -1,7 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#![feature(cell_update)]
-
 use thiserror::Error;
 
 mod write;
