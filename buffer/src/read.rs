@@ -38,9 +38,9 @@ impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> Reader<'a, T> {
 
 impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> BufferReader for Reader<'a, T> {
     fn add_bytes_read(&self, n: usize) {
-        self.bytes_read.update(move |old_value| {
-            old_value + n
-        });
+        self.bytes_read.set(
+            self.bytes_read.get() + n
+        );
     }
 }
 
