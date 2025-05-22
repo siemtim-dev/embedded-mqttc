@@ -37,7 +37,7 @@ default-features = false
 
 [dependencies]
 ## From Workspace Internal 
-embytes-buffer = { version = "1.0.0", path = "./embytes-buffer", default-features = false, features = ["serde", "embedded"]}
+embytes-buffer = { version = "0.0.1", path = "./embytes-buffer", default-features = false, features = ["serde", "embedded"]}
 
 # From Workspace external
 mqttrs = { workspace = true, default-features = false }
