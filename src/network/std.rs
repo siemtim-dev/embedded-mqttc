@@ -9,7 +9,7 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-use crate::Debug2Format;
+use crate::fmt::Debug2Format;
 
 use super::NetworkError;
 

@@ -1,9 +1,9 @@
 use core::{cell::RefCell, cmp::min, future::Future, pin::Pin, task::{Context, Poll}};
 
-use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
+use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_sync::{blocking_mutex::{raw::CriticalSectionRawMutex, Mutex}, waitqueue::WakerRegistration};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
-use crate::{TryRead, TryWrite};
+use crate::network::{TryRead, TryWrite};
 pub struct BufferedStream<const N: usize> {
     pub(crate) inner: Mutex<CriticalSectionRawMutex, RefCell<BufferedStreamInner<N>>>
 }

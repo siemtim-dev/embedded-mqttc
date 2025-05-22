@@ -2,13 +2,12 @@
 
 use core::future::Future;
 
-use buffer::{Buffer, BufferReader, BufferWriter, ReadWrite};
+use embytes_buffer::{Buffer, BufferReader, BufferWriter, ReadWrite};
 use embedded_io_async::{ErrorType, Read, ReadReady, Write, WriteReady};
 use thiserror::Error;
 
 
-pub(crate) mod fmt;
-use fmt::Debug2Format;
+use crate::fmt::Debug2Format;
 
 
 #[cfg(feature = "embassy")]

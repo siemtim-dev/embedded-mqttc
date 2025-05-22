@@ -1,13 +1,13 @@
 use core::convert::Infallible;
 use core::{cell::RefCell, future::Future, pin::Pin};
 
-use buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
+use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_futures::select::{select, select3, Either3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
 use mqttrs::{decode_slice_with_len, Packet, QoS};
-use network::mqtt::MqttPacketError;
-use network::NetworkError;
-use network::{ mqtt::WriteMqttPacketMut, NetwordSendReceive, NetworkConnection };
+use crate::network::mqtt::MqttPacketError;
+use crate::network::NetworkError;
+use crate::network::{ mqtt::WriteMqttPacketMut, NetwordSendReceive, NetworkConnection };
 use crate::{client::MqttClient, state::State, time, ClientConfig, MqttError, MqttEvent, MqttPublish, MqttRequest};
 
 use crate::time::Duration;
@@ -369,7 +369,7 @@ mod test {
     use mqttrs::{Connack, ConnectReturnCode, Packet, PacketType, QoS, Suback, SubscribeReturnCodes};
     use crate::time;
 
-    use network::{fake::{self, ConnectionRessources, ReadAtomic}, mqtt::{ReadMqttPacket, WriteMqttPacket}};
+    use crate::network::{fake::{self, ConnectionRessources, ReadAtomic}, mqtt::{ReadMqttPacket, WriteMqttPacket}};
     use crate::ClientConfig;
 
     use super::MqttEventLoop;

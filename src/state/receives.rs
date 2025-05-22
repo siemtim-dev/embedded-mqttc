@@ -1,10 +1,10 @@
 
-use buffer::BufferWriter;
+use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use network::mqtt::{MqttPacketError, WriteMqttPacketMut};
+use crate::network::mqtt::{MqttPacketError, WriteMqttPacketMut};
 use crate::time::Instant;
 use mqttrs::{Packet, Pid, Publish, QosPid};
-use queue_vec::{split::WithQueuedVecInner, QueuedVec};
+use crate::queue_vec::{split::WithQueuedVecInner, QueuedVec};
 
 use crate::{time, MqttError, MqttPublish};
 
@@ -219,9 +219,9 @@ impl ReceivedPublishQueue {
 
 #[cfg(test)]
 mod tests {
-    use buffer::{new_stack_buffer, ReadWrite};
+    use embytes_buffer::{new_stack_buffer, ReadWrite};
     use mqttrs::{Packet, Pid, Publish, QosPid};
-    use network::mqtt::ReadMqttPacket;
+    use crate::network::mqtt::ReadMqttPacket;
 
     use super::ReceivedPublishQueue;
 

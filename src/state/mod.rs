@@ -1,6 +1,6 @@
 use core::cell::RefCell;
 
-use buffer::BufferWriter;
+use embytes_buffer::BufferWriter;
 
 use crate::misc::AsVec;
 
@@ -322,7 +322,7 @@ mod tests {
     use core::time::Duration;
     use std::time::Instant;
 
-    use buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
+    use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use heapless::{String, Vec};
     use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet, PacketType, QoS};

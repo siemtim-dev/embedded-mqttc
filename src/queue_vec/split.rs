@@ -6,7 +6,7 @@ use core::{pin::Pin, task::{Context, Poll}};
 use embassy_sync::waitqueue::MultiWakerRegistration;
 use heapless::Vec;
 
-use crate::MAX_WAKERS;
+use super::MAX_WAKERS;
 
 pub trait WithQueuedVecInner<A: 'static, T: 'static, const N: usize> {
     fn with_queued_vec_inner<F, O>(&self, operation: F) -> O where F: FnOnce(&mut QueuedVecInner<A, T, N>) -> O;

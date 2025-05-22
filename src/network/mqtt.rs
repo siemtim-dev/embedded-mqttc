@@ -1,10 +1,10 @@
 use core::future::Future;
 
-use buffer::{BufferReader, BufferWriter};
+use embytes_buffer::{BufferReader, BufferWriter};
 use mqttrs::{decode_slice_with_len, encode_slice, Packet};
 use thiserror::Error;
 
-use crate::fake::{BufferedStream, ServerConnection};
+use super::fake::{BufferedStream, ServerConnection};
 
 #[derive(Debug, PartialEq, Clone, Error)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

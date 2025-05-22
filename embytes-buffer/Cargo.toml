@@ -1,8 +1,11 @@
 [package]
-name = "buffer"
-version = "1.0.0"
+name = "embytes-buffer"
+description = "Crate for an embedded bytes buffer"
 edition = "2021"
 license = "Apache-2.0"
+
+version = "0.0.1"
+publish = true
 
 [dependencies]
 defmt = { workspace = true , optional = true }
