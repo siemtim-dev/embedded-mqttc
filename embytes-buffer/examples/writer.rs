@@ -1,4 +1,4 @@
-use buffer::{Buffer, BufferWriter, ReadWrite};
+use embytes_buffer::{Buffer, BufferWriter, ReadWrite};
 use embedded_io::{Read, Write};
 
 

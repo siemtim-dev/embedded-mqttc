@@ -1,10 +1,9 @@
 use core::{future::Future, pin::Pin, task::{Context, Poll}};
 
-use buffer::{BufferReader, ReadWrite};
+use embytes_buffer::{BufferReader, ReadWrite};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
 use mqttrs::Packet;
-use crate::{mqtt::MqttPacketError, NetworkConnection, NetworkError, TryRead, TryWrite};
-use crate::mqtt::ReadMqttPacket;
+use crate::network::{mqtt::MqttPacketError, mqtt::ReadMqttPacket, NetworkConnection, NetworkError, TryRead, TryWrite};
 
 use super::BufferedStream;
 
@@ -203,7 +202,7 @@ mod connection_tests {
 
     use embedded_io_async::{Read, Write};
 
-    use crate::fake::{new_connection, ConnectionRessources};
+    use super::{new_connection, ConnectionRessources};
 
     #[tokio::test]
     async fn test_connection() {

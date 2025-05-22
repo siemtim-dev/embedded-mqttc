@@ -1,7 +1,7 @@
 
 use core::cell::RefCell;
 
-use buffer::BufferWriter;
+use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
 use heapless::{FnvIndexMap, String, Vec};
@@ -333,10 +333,10 @@ impl SubQueue {
 
 #[cfg(test)]
 mod tests {
-    use buffer::{new_stack_buffer, ReadWrite};
+    use embytes_buffer::{new_stack_buffer, ReadWrite};
     use heapless::Vec;
     use mqttrs::{Packet, Pid, QoS, Suback, SubscribeReturnCodes};
-    use network::mqtt::ReadMqttPacket;
+    use crate::network::mqtt::ReadMqttPacket;
 
     use crate::{state::{pid::PidSource, sub::SubQueue}, AutoSubscribe, MqttEvent, Topic, UniqueID};
 

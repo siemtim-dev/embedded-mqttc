@@ -1,5 +1,5 @@
 
-use buffer::BufferWriter;
+use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use crate::time::{Duration, Instant};
 use mqttrs::{encode_slice, Error, Packet, Pid};
@@ -302,7 +302,7 @@ impl PublishQueue {
 mod tests {
     extern crate std;
 
-    use buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
+    use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use mqttrs::{decode_slice_with_len, Packet, Pid, Publish, QoS};
 

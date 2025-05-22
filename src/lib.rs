@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use heapless::Vec;
 
-pub use buffer::*;
+pub use embytes_buffer::*;
 
 use mqttrs::{Pid, Publish, QosPid};
 pub use mqttrs::QoS;
@@ -25,10 +25,9 @@ pub mod client;
 
 pub(crate) mod misc;
 
-// Reexport important things
-pub use network;
-
 pub mod queue_vec;
+
+pub mod network;
 
 
 static COUNTER: Mutex<CriticalSectionRawMutex, Cell<u64>> = Mutex::new(Cell::new(0));

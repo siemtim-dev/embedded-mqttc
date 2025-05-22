@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, pin::Pin};
 
-use network::{fake::{new_connection, ClientConnection, ConnectionRessources, ReadAtomic, ServerConnection}, mqtt::WriteMqttPacket};
+use embedded_mqtt::network::{fake::{new_connection, ClientConnection, ConnectionRessources, ReadAtomic, ServerConnection}, mqtt::WriteMqttPacket};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_io_async::Read;
 use mqttrs::{decode_slice, Connack, ConnectReturnCode, Packet, PacketType, QoS};

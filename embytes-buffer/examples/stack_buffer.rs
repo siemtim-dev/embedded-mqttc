@@ -1,4 +1,4 @@
-use buffer::new_stack_buffer;
+use embytes_buffer::new_stack_buffer;
 use embedded_io::{Read, Write};
 
 
