@@ -73,7 +73,7 @@ mod tests {
     use core::time::Duration;
     use std::sync::Arc;
 
-    use crate::{split::WithQueuedVecInner, QueuedVec};
+    use super::{split::WithQueuedVecInner, QueuedVec};
 
     #[tokio::test]
     async fn test_add() {

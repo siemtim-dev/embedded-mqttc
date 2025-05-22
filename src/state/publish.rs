@@ -3,7 +3,7 @@ use buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use crate::time::{Duration, Instant};
 use mqttrs::{encode_slice, Error, Packet, Pid};
-use queue_vec::{split::WithQueuedVecInner, QueuedVec};
+use crate::queue_vec::{split::WithQueuedVecInner, QueuedVec};
 
 use crate::{io::AsyncSender, time, MqttError, MqttEvent, MqttPublish, UniqueID};
 

@@ -6,7 +6,7 @@ use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
 use heapless::{FnvIndexMap, String, Vec};
 use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
-use queue_vec::split::{QueuedVecInner, WithQueuedVecInner};
+use crate::queue_vec::split::{QueuedVecInner, WithQueuedVecInner};
 
 use crate::{time, MqttError, MqttEvent, Topic, UniqueID};
 

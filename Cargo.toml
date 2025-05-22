@@ -1,18 +1,17 @@
 [package]
 name = "embedded-mqtt"
 description = "A simple MQTT client designed for use with embassy"
-version = "1.0.0"
+version = "0.0.1"
 edition = "2021"
 repository = "https://github.com/siemtim-dev/embedded-mqtt"
 homepage = "https://github.com/siemtim-dev/embedded-mqtt"
 readme = "README.md"
 
 license = "Apache-2.0"
-license-file = "LICENSE"
 
 [workspace]
 members = [
-    "buffer", "network", "queue-vec"
+    "buffer", "network"
 ]
 
 ## Workspace wide dependencies
@@ -39,7 +38,6 @@ default-features = false
 [dependencies]
 ## From Workspace Internal 
 buffer = { version = "1.0.0", path = "./buffer", default-features = false, features = ["serde", "embedded"]}
-queue-vec = { version = "1.0.0", default-features = false, path = "./queue-vec"}
 network = { version = "1.0.0", path = "./network", default-features = false }
 
 # From Workspace external
@@ -57,7 +55,7 @@ embassy-time = { workspace = true, default-features = false, optional = true }
 [features]
 default = [ "std" ]
 embassy = [ "dep:embassy-time", "network/embassy" ]
-std = [ "embassy-sync/std", "queue-vec/std", "dep:tokio", "network/std" ]
+std = [ "embassy-sync/std", "dep:tokio", "network/std" ]
 defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "buffer/defmt", "network/defmt" ]
 tracing = [ "std", "dep:tracing", "network/tracing" ]
 test_with_broker = [ "std" ]
