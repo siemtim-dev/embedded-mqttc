@@ -1,8 +1,8 @@
 
 
 use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
-use embedded_mqtt::network::std::StdNetworkConnection;
-use embedded_mqtt::{io::MqttEventLoop, ClientConfig, ClientCredentials, MqttEvent};
+use embedded_mqttc::network::std::StdNetworkConnection;
+use embedded_mqttc::{io::MqttEventLoop, ClientConfig, ClientCredentials, MqttEvent};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use mqttrs::QoS;
 

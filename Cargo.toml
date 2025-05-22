@@ -1,5 +1,5 @@
 [package]
-name = "embedded-mqtt"
+name = "embedded-mqttc"
 description = "A simple MQTT client designed for use with embassy"
 version = "0.0.1"
 edition = "2021"
