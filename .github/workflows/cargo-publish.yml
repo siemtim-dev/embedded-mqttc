@@ -1,0 +1,37 @@
+name: Cargo Publish
+run-name: Publish new version for commit  ${{ github.sha }} to crates.io
+
+# on:
+#   push:
+#     branches:
+#       - main
+
+on:
+  workflow_run:
+    workflows:
+      - "Test Crate"
+    branches:
+      - main
+    types: 
+      - completed
+
+jobs:
+  cargo-publish:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    # See https://github.com/marketplace/actions/publish-crates
+    # Publish embytes-buffer
+    - uses: katyo/publish-crates@v2
+      with:
+        registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        path: ./embytes-buffer
+    # Publish main crate
+    - uses: katyo/publish-crates@v2
+      with:
+        registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -1,6 +1,6 @@
 name: Test Crate
 run-name: Testing commit ${{ github.sha }}
-on: [ push, pull_request ]
+on: [ push ]
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest
