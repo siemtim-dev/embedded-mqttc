@@ -3,7 +3,7 @@ use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use crate::network::mqtt::{MqttPacketError, WriteMqttPacketMut};
 use crate::time::Instant;
-use mqttrs::{Packet, Pid, Publish, QosPid};
+use mqttrs2::{Packet, Pid, Publish, QosPid};
 use crate::queue_vec::{split::WithQueuedVecInner, QueuedVec};
 
 use crate::{time, MqttError, MqttPublish};
@@ -220,7 +220,7 @@ impl ReceivedPublishQueue {
 #[cfg(test)]
 mod tests {
     use embytes_buffer::{new_stack_buffer, ReadWrite};
-    use mqttrs::{Packet, Pid, Publish, QosPid};
+    use mqttrs2::{Packet, Pid, Publish, QosPid};
     use crate::network::mqtt::ReadMqttPacket;
 
     use super::ReceivedPublishQueue;

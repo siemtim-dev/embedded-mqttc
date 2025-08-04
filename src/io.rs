@@ -4,7 +4,7 @@ use core::{cell::RefCell, future::Future, pin::Pin};
 use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_futures::select::{select, select3, Either3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
-use mqttrs::{decode_slice_with_len, Packet, QoS};
+use mqttrs2::{decode_slice_with_len, Packet, QoS};
 use crate::network::mqtt::MqttPacketError;
 use crate::network::NetworkError;
 use crate::network::{ mqtt::WriteMqttPacketMut, NetwordSendReceive, NetworkConnection };
@@ -366,7 +366,7 @@ mod test {
 
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use heapless::String;
-    use mqttrs::{Connack, ConnectReturnCode, Packet, PacketType, QoS, Suback, SubscribeReturnCodes};
+    use mqttrs2::{Connack, ConnectReturnCode, Packet, PacketType, QoS, Suback, SubscribeReturnCodes};
     use crate::time;
 
     use crate::network::{fake::{self, ConnectionRessources, ReadAtomic}, mqtt::{ReadMqttPacket, WriteMqttPacket}};

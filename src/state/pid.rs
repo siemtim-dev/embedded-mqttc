@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
-use mqttrs::Pid;
+use mqttrs2::Pid;
 
 
 
@@ -37,7 +37,7 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    use mqttrs::Pid;
+    use mqttrs2::Pid;
 
     use super::PidSource;
 

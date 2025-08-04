@@ -2,7 +2,7 @@ use core::{future::Future, pin::Pin, task::{Context, Poll}};
 
 use embytes_buffer::{BufferReader, ReadWrite};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
-use mqttrs::Packet;
+use mqttrs2::Packet;
 use crate::network::{mqtt::MqttPacketError, mqtt::ReadMqttPacket, NetworkConnection, NetworkError, TryRead, TryWrite};
 
 use super::BufferedStream;

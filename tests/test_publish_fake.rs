@@ -5,7 +5,7 @@ use std::{cell::RefCell, pin::Pin};
 use embedded_mqttc::network::{fake::{new_connection, ClientConnection, ConnectionRessources, ReadAtomic, ServerConnection}, mqtt::WriteMqttPacket};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_io_async::Read;
-use mqttrs::{decode_slice, Connack, ConnectReturnCode, Packet, PacketType, QoS};
+use mqttrs2::{decode_slice, Connack, ConnectReturnCode, Packet, PacketType, QoS};
 use embedded_mqttc::{client::MqttClient, io::MqttEventLoop, ClientConfig, ClientCredentials};
 use heapless::Vec;
 

@@ -2,7 +2,7 @@
 use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use crate::time::{Duration, Instant};
-use mqttrs::{encode_slice, Error, Packet, Pid};
+use mqttrs2::{encode_slice, Error, Packet, Pid};
 use crate::queue_vec::{split::WithQueuedVecInner, QueuedVec};
 
 use crate::{io::AsyncSender, time, MqttError, MqttEvent, MqttPublish, UniqueID};
@@ -114,13 +114,13 @@ impl PublishRequest {
        
        match self.state {
             RequestState::Initial => match self.request.qos {
-                mqttrs::QoS::AtMostOnce => {
+                mqttrs2::QoS::AtMostOnce => {
                     self.state = RequestState::Done
                 },
-                mqttrs::QoS::AtLeastOnce => {
+                mqttrs2::QoS::AtLeastOnce => {
                     self.state = RequestState::AwaitPuback(time::now())
                 },
-                mqttrs::QoS::ExactlyOnce => {
+                mqttrs2::QoS::ExactlyOnce => {
                     self.state = RequestState::AwaitPubrec(time::now())
                 },
             },
@@ -240,7 +240,7 @@ impl PublishQueue {
                 request.state = RequestState::AwaitPubcomp(time::now());
                 Ok(())
             },
-            Err(mqttrs::Error::WriteZero) => {
+            Err(mqttrs2::Error::WriteZero) => {
                 warn!("cannot encode pubrel to buffer: not enaugh space");
                 Ok(())
             },
@@ -304,7 +304,7 @@ mod tests {
 
     use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-    use mqttrs::{decode_slice_with_len, Packet, Pid, Publish, QoS};
+    use mqttrs2::{decode_slice_with_len, Packet, Pid, Publish, QoS};
 
     use crate::{time, MqttEvent, MqttPublish, UniqueID};
     use crate::time::Duration;

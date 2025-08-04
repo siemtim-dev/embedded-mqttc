@@ -5,7 +5,7 @@ use embytes_buffer::BufferWriter;
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use crate::{time::{Duration, Instant}, AutoSubscribe};
 use heapless::{FnvIndexMap, String, Vec};
-use mqttrs::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
+use mqttrs2::{encode_slice, Packet, Pid, QoS, Suback, Subscribe, SubscribeReturnCodes, SubscribeTopic, Unsubscribe};
 use crate::queue_vec::split::{QueuedVecInner, WithQueuedVecInner};
 
 use crate::{time, MqttError, MqttEvent, Topic, UniqueID};
@@ -133,7 +133,7 @@ impl Request {
                 debug!("{} packet {} written to send buffer; len = {}", self.request_type, self.pid, n);
                 Ok(())
             },
-            Err(mqttrs::Error::WriteZero) => {
+            Err(mqttrs2::Error::WriteZero) => {
                 warn!("cannot write {} packet so send buffer: no capacity ({} bytes left)", 
                     self.request_type, send_buffer.remaining_capacity());
                 Ok(())
@@ -335,7 +335,7 @@ impl SubQueue {
 mod tests {
     use embytes_buffer::{new_stack_buffer, ReadWrite};
     use heapless::Vec;
-    use mqttrs::{Packet, Pid, QoS, Suback, SubscribeReturnCodes};
+    use mqttrs2::{Packet, Pid, QoS, Suback, SubscribeReturnCodes};
     use crate::network::mqtt::ReadMqttPacket;
 
     use crate::{state::{pid::PidSource, sub::SubQueue}, AutoSubscribe, MqttEvent, Topic, UniqueID};

@@ -28,19 +28,15 @@ tokio = { version = "1.43.0",  features = ["macros", "time", "io-util", "net"] }
 tracing = { version = "0.1.41" }
 
 embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false }
+mqttrs2 = { version = "0.1.0", default-features = false }
 
-[workspace.dependencies.mqttrs]
-version = "0.4"
-git = "https://github.com/00imvj00/mqttrs.git"
-rev = "97f935ad05699000acc490e8178904c1cc822af9"
-default-features = false
 
 [dependencies]
 ## From Workspace Internal 
 embytes-buffer = { version = "0.0.1", path = "./embytes-buffer", default-features = false, features = ["serde", "embedded"]}
 
 # From Workspace external
-mqttrs = { workspace = true, default-features = false }
+mqttrs2 = { workspace = true, default-features = false }
 thiserror = { workspace = true, default-features = false }
 heapless = { workspace = true }
 embassy-sync = { workspace = true }
@@ -58,7 +54,7 @@ embassy-net = { version = ">= 0.5.0, < 0.7.0", optional = true, features = ["dns
 default = [ "std" ]
 embassy = [ "dep:embassy-time", "dep:embassy-net" ]
 std = [ "embassy-sync/std", "dep:tokio" ]
-defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs/defmt", "embassy-futures/defmt", "embytes-buffer/defmt" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs2/defmt", "embassy-futures/defmt", "embytes-buffer/defmt" ]
 tracing = [ "std", "dep:tracing" ]
 test_with_broker = [ "std" ]
 

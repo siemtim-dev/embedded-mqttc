@@ -1,6 +1,6 @@
 
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::{Receiver, Sender}, pubsub::{PubSubChannel, WaitResult}};
-use mqttrs::QoS;
+use mqttrs2::QoS;
 
 use crate::{MqttError, MqttEvent, MqttPublish, MqttRequest, Topic, UniqueID};
 

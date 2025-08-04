@@ -1,7 +1,7 @@
 use core::future::Future;
 
 use embytes_buffer::{BufferReader, BufferWriter};
-use mqttrs::{decode_slice_with_len, encode_slice, Packet};
+use mqttrs2::{decode_slice_with_len, encode_slice, Packet};
 use thiserror::Error;
 
 use super::fake::{BufferedStream, ServerConnection};
@@ -38,7 +38,7 @@ impl <T> WriteMqttPacketMut for T where T: BufferWriter {
                 self.commit(n).unwrap();
                 Ok(())
             },
-            Err(mqttrs::Error::WriteZero) => {
+            Err(mqttrs2::Error::WriteZero) => {
                 Err(MqttPacketError::NotEnaughBufferSpace)
             }
             Err(e) => {

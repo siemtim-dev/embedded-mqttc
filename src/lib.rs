@@ -10,8 +10,8 @@ use heapless::Vec;
 
 pub use embytes_buffer::*;
 
-use mqttrs::{Pid, Publish, QosPid};
-pub use mqttrs::QoS;
+use mqttrs2::{Pid, Publish, QosPid};
+pub use mqttrs2::QoS;
 
 // This must come first so the macros are visible
 pub(crate) mod fmt;

@@ -8,7 +8,7 @@ use embassy_sync::blocking_mutex;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::signal::Signal;
 use heapless::Vec;
-use mqttrs::{encode_slice, Connack, Connect, Error, Packet, Protocol};
+use mqttrs2::{encode_slice, Connack, Connect, Error, Packet, Protocol};
 use pid::PidSource;
 use ping::PingState;
 use publish::PublishQueue;
@@ -147,7 +147,7 @@ impl <M: RawMutex> State<M> {
     fn process_connack(&self, connack: &Connack) -> Result<Option<MqttEvent>, MqttError> {
 
         match connack.code {
-            mqttrs::ConnectReturnCode::Accepted => {
+            mqttrs2::ConnectReturnCode::Accepted => {
                 self.set_connection_state(ConnectionState::Connected);
                 info!("connction to broker established");
 
@@ -161,12 +161,12 @@ impl <M: RawMutex> State<M> {
 
                 Ok(Some(MqttEvent::Connected))
             },
-            mqttrs::ConnectReturnCode::RefusedProtocolVersion | mqttrs::ConnectReturnCode::RefusedIdentifierRejected | mqttrs::ConnectReturnCode::ServerUnavailable => {
+            mqttrs2::ConnectReturnCode::RefusedProtocolVersion | mqttrs2::ConnectReturnCode::RefusedIdentifierRejected | mqttrs2::ConnectReturnCode::ServerUnavailable => {
                 error!("connack returned error: {}", connack.code);
                 self.set_connection_state(ConnectionState::Failed(MqttError::ConnackError));
                 Err(MqttError::ConnackError)
             },
-            mqttrs::ConnectReturnCode::BadUsernamePassword | mqttrs::ConnectReturnCode::NotAuthorized => {
+            mqttrs2::ConnectReturnCode::BadUsernamePassword | mqttrs2::ConnectReturnCode::NotAuthorized => {
                 error!("connack: authentication failed: {}", connack.code);
                 self.set_connection_state(ConnectionState::Failed(MqttError::AuthenticationError));
                 Err(MqttError::AuthenticationError)
@@ -325,7 +325,7 @@ mod tests {
     use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use heapless::{String, Vec};
-    use mqttrs::{decode_slice_with_len, Connack, ConnectReturnCode, Packet, PacketType, QoS};
+    use mqttrs2::{decode_slice_with_len, Connack, ConnectReturnCode, Packet, PacketType, QoS};
 
     use crate::{io::AsyncSender, state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
 
