@@ -1,7 +1,7 @@
 [package]
 name = "embedded-mqttc"
 description = "A simple MQTT client designed for use with embassy"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/siemtim-dev/embedded-mqtt"
 homepage = "https://github.com/siemtim-dev/embedded-mqtt"
@@ -33,7 +33,7 @@ mqttrs2 = { version = "0.1.0", default-features = false }
 
 [dependencies]
 ## From Workspace Internal 
-embytes-buffer = { version = "0.0.1", path = "./embytes-buffer", default-features = false, features = ["serde", "embedded"]}
+embytes-buffer = { version = "0.1.0", path = "./embytes-buffer", default-features = false, features = ["serde", "embedded"]}
 
 # From Workspace external
 mqttrs2 = { workspace = true, default-features = false }
