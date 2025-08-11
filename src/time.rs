@@ -1,5 +1,7 @@
-/// Calls to [`Instant::now()`] fail during tests. So this modul eis used to exchange the 
+/// Calls to [`Instant::now()`] fail during tests. So this module is used to exchange the 
 /// functions dynamicly
+/// 
+/// This module is also used to dynamically exchange [`std::time`] and [`embassy_time`]
 
 #[cfg(feature = "embassy")]
 pub(crate) use embassy_time::{Duration, Instant};
