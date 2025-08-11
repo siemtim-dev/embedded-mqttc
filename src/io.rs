@@ -4,7 +4,7 @@ use core::{cell::RefCell, future::Future, pin::Pin};
 use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, BufferWriter, ReadWrite};
 use embassy_futures::select::{select, select3, Either3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, pubsub::PubSubChannel};
-use mqttrs2::{decode_slice_with_len, Packet, QoS};
+use mqttrs2::{decode_slice_with_len, LastWill, Packet, QoS};
 use crate::network::mqtt::MqttPacketError;
 use crate::network::NetworkError;
 use crate::network::{ mqtt::WriteMqttPacketMut, NetwordSendReceive, NetworkConnection };
@@ -52,26 +52,42 @@ impl <M: RawMutex, T, const N: usize> AsyncReceiver<T> for Channel<M, T, N> {
     }
 }
 
-pub struct MqttEventLoop<M: RawMutex, const B: usize> {
+pub struct MqttEventLoop<'l, M: RawMutex, const B: usize> {
     recv_buffer: RefCell<Buffer<[u8; B]>>,
     send_buffer: RefCell<Buffer<[u8; B]>>,
 
-    state: State<M>,
+    state: State<'l, M>,
 
     control_sender: PubSubChannel<M, MqttEvent, 4, 16, 8>,
     request_receiver: Channel<M, MqttRequest, 4>,
     received_publishes: Channel<M, MqttPublish, 4>
 }
 
-impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
-
+impl <M: RawMutex, const B: usize> MqttEventLoop<'static, M, B> {
     pub fn new(config: ClientConfig) -> Self {
         
         Self {
             recv_buffer: RefCell::new(new_stack_buffer::<B>()),
             send_buffer: RefCell::new(new_stack_buffer::<B>()),
 
-            state: State::new(config),
+            state: State::new(config, None),
+
+            control_sender: PubSubChannel::new(),
+            request_receiver: Channel::new(),
+            received_publishes: Channel::new()
+        }
+    }
+}
+
+impl <'l, M: RawMutex, const B: usize> MqttEventLoop<'l, M, B> {
+
+    pub fn new_with_last_will(config: ClientConfig, last_will: LastWill<'l>) -> Self {
+        
+        Self {
+            recv_buffer: RefCell::new(new_stack_buffer::<B>()),
+            send_buffer: RefCell::new(new_stack_buffer::<B>()),
+
+            state: State::new(config, Some(last_will)),
 
             control_sender: PubSubChannel::new(),
             request_receiver: Channel::new(),
@@ -208,7 +224,7 @@ impl <M: RawMutex, const B: usize> MqttEventLoop<M, B> {
     }
 
 
-    /// Receive requests from cleint.
+    /// Receive requests from client.
     /// Returns if the client sends a disconnect message
     async fn work_request_receive(&self) -> Result<(), MqttError> {
         loop {

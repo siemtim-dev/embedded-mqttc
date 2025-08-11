@@ -171,6 +171,7 @@ pub(crate) mod test_time {
         })
     }
 
+    /// Sets the time source for tests to the default for the environment
     #[allow(dead_code)]
     pub(crate) fn set_default() {
         NOW.with(|inner| {

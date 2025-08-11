@@ -1,10 +1,11 @@
 
 
 use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
+use embassy_futures::select::select;
 use embedded_mqttc::network::std::StdNetworkConnection;
 use embedded_mqttc::{io::MqttEventLoop, ClientConfig, ClientCredentials, MqttEvent};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
-use mqttrs2::QoS;
+use mqttrs2::{LastWill, QoS};
 
 use test_log::test;
 
@@ -415,5 +416,64 @@ async fn test_auto_subscribe() {
     cancel_token.cancel();
 }
 
+#[test(tokio::test)]
+#[ntest::timeout(20000)]
+#[cfg_attr(not(feature = "test_with_broker"), ignore = "broker test skipped")]
+async fn test_last_will() {
+    dotenvy::dotenv().ok();
 
+    let broker_config = BrokerConfig::from_env();
+    
+    let client_id = Uuid::new_v4().to_string();
+    let mqtt_config = broker_config.new_client_config(&client_id);
+
+    let topic = random_topic(None);
+    let last_will = LastWill{
+        topic: &topic,
+        message: "test-device-down".as_bytes(),
+        qos: QoS::AtMostOnce,
+        retain: false
+    };
+
+    let event_loop = 
+        MqttEventLoop::<CriticalSectionRawMutex, 1024>::new_with_last_will(mqtt_config, last_will);
+
+    let client = event_loop.client();
+
+    let client_loop_future = async {
+        // Wait before sending the connect packet
+        tokio::time::sleep(core::time::Duration::from_millis(1000)).await;
+        let mut connection = broker_config.new_connection();
+        let connection = Pin::new(&mut connection);
+        event_loop.run(connection).await.unwrap();
+        tracing::trace!("TEST: client_loop_future done");
+    };
+
+    let client_future = async {
+        client.on(|e| *e == MqttEvent::Connected).await;
+        tracing::trace!("TEST: client is connected, drop connection ungracefully");
+
+    };
+    let client_future = select(client_future, client_loop_future);
+
+
+    let (client, mut receiver, cancel_token) = create_sinple_client(&broker_config);
+    let subscribe_future = async {
+        client.subscribe(&topic, rumqttc::QoS::AtLeastOnce).await.unwrap();
+        
+        let publish = receiver.recv().await.expect("there must be a publish");
+        assert_eq!(publish.topic, &topic[..]);
+        let payload_str = std::str::from_utf8(&publish.payload).unwrap();
+        assert_eq!(payload_str, "test-device-down");
+        client.disconnect().await.unwrap();
+        tracing::trace!("TEST: subscribe_future done");
+    };
+
+    tokio::join! (
+        client_future,
+        subscribe_future
+    );
+
+    cancel_token.cancel();
+}
 
