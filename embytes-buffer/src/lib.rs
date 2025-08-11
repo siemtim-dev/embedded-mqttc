@@ -19,30 +19,38 @@ pub mod json;
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BufferError {
 
+    /// This error is returned if there is not enaugh remaining space
     #[error("Error writing to buffer: no remaining capacity")]
     NoCapacity,
 
+    /// A provided slice wa empty
+    /// Is used for trait implementations like [`embedded_io::Read`], [`embedded_io::Write`], [`std::io::Read`], [`std::io::Write`]
     #[error("The provided slice to read from or write to has a len = 0")]
     ProvidedSliceEmpty,
 
+    /// If you try to read data from an empty buffer this errror is returned
     #[error("Error reading from buffer: no remaining data")]
     NoData,
+
 
     #[cfg(feature = "serde")]
     #[error("Error while deserializing JSON")]
     JsonDeserialize(serde_json_core::de::Error)
 }
 
-///
+
 /// Trait that allows to create a reader and a writer for a buffer.
 /// See [`BufferReader`] adn [`BufferWriter`]
 ///
 pub trait ReadWrite {
+    /// Creates a reader to read from the buffer
     fn create_reader<'a>(&'a mut self) -> impl BufferReader + 'a;
+
+    /// Creates a writer to write to the buffer
     fn create_writer<'a>(&'a mut self) -> impl BufferWriter + 'a;
 }
 
-
+/// A buffer that allows reading and writuing bytes [`u8`] from / to an underlying generic source
 #[derive(Debug)]
 pub struct Buffer<T: AsMut<[u8]> + AsRef<[u8]>> {
     pub(crate) source: T,
@@ -78,7 +86,7 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
     /// # Example
     /// 
     /// ```rust
-    ///     use buffer::Buffer;
+    ///     use embytes_buffer::Buffer;
     /// 
     ///     let mut bytes = [0; 1024];
     ///     let mut buffer = Buffer::new(&mut bytes);
@@ -102,33 +110,37 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         self.source.as_ref().len()
     }
 
-    /// Returns the remaining space that can be written
+    /// Returns the remaining space that can be written to. 
     /// This method does not perform a [`Buffer::shift`]
     pub fn remaining_capacity(&self) -> usize {
         self.capacity() - self.write_position
     }
 
-    /// returns if there is remaining 
-    /// is equal to `Buffer::remaining_capacity() > 0`
+    /// returns `true` if there is remaining capacity to write to. 
+    /// is equal to [`Buffer::remaining_capacity`] ` > 0`
     pub fn has_remaining_capacity(&self) -> bool {
         self.capacity() > self.write_position
     }
 
-    /// Returns the remaining bayes to read
+    /// Returns the remaining bytes to read
     pub fn remaining_len(&self) -> usize {
         self.write_position - self.read_position
     }
 
+    /// returns `true` if there are remainng bytes to read. 
     pub fn has_remaining_len(&self) -> bool {
         self.write_position > self.read_position
     }
 
-    /// Returns true if the read position is > 0
+    /// Returns `true` if there is dead capacity. 
+    /// Dead capacity occures when bytes are read from a buffer.
+    /// Dead capacity can be regained by using [`Buffer::shift`]
     pub fn has_dead_capacity(&self) -> bool {
         self.read_position > 0
     }
 
-    /// Shifts the content of the source left to reuse space of read bytes.
+    /// Shifts the content of the source left to reuse space of read bytes. 
+    /// See also [`Buffer::has_dead_capacity`]
     pub fn shift(&mut self) {
         self.source.as_mut().rotate_left(self.read_position);
         self.write_position -= self.read_position;
@@ -136,7 +148,7 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
     }
 
     /// Performa s [`Buffer::shift`] if there is no remianing capacity and 
-    /// returns if there is remainig capacity afterwards
+    /// returns `true` if there is remainig capacity afterwards
     pub fn ensure_remaining_capacity(&mut self) -> bool {
         if ! self.has_remaining_capacity() {
             self.shift();
@@ -212,6 +224,7 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
         }
     }
 
+    /// Creates a reader that ready at most `max_bytes`
     pub fn create_reader_with_max(&mut self, max_bytes: usize) -> Reader<'_, T> {
         Reader::new_with_max(self, max_bytes)
     }
@@ -226,7 +239,7 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> Buffer<T> {
     /// 
     /// # Errors
     /// 
-    /// [`BufferError::NoData`] if n < self.remaining_len()
+    /// [`BufferError::NoData`] if `n < self.remaining_len()`
     pub fn skip(&mut self, n: usize) -> Result<(), BufferError> {
         if self.remaining_len() >= n {
             self.read_position += n;
@@ -350,19 +363,6 @@ impl <T: AsMut<[u8]> + AsRef<[u8]>> embedded_io::Read for Buffer<T> {
         }
     }
 }
-
-// Old clone impl, throw awai if workspace compiles without error
-/* 
-impl <const N: usize> Clone for Buffer<[u8; N]> {
-    fn clone(&self) -> Self {
-        Self { 
-            source: self.source.clone(), 
-            write_position: self.write_position.clone(), 
-            read_position: self.read_position.clone() 
-        }
-    }
-}
-*/
 
 impl <T: AsMut<[u8]> + AsRef<[u8]> + Clone> Clone for Buffer<T> {
     fn clone(&self) -> Self {

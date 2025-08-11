@@ -2,14 +2,23 @@ use core::{cell::Cell, ops::{Deref, DerefMut}};
 
 use crate::{Buffer, BufferError};
 
+/// A Writer to write to a [`Buffer`] as it is a writeable slice
 pub trait BufferWriter: DerefMut<Target = [u8]> {
+
+    /// After writing th bytes to `self` the user must tell teh buffer how many bytes have bee written. 
+    /// This increases the write_position of the buffer by `n`
     fn commit(&self, n: usize) -> Result<(), BufferError>;
 
-    fn write(&mut self, buf: &[u8]) -> Result<(), BufferError>;
-
+    /// Return the number of bytes that can be written without an error
     fn remaining_capacity(&self) -> usize;
+
+    /// Returns `true` if the writer has remaining capacity to write to
+    fn has_remaining_capacity(&self) -> bool {
+        self.remaining_capacity() > 0
+    }
 }
 
+/// An implementation of [`BufferWriter`] for [`Buffer`]
 pub struct Write<'a, T: AsMut<[u8]> + AsRef<[u8]>> {
     buffer: &'a mut Buffer<T>,
     bytes_written: Cell<usize>
@@ -35,10 +44,6 @@ impl <'a, T: AsMut<[u8]> + AsRef<[u8]>> BufferWriter for Write<'a, T> {
             );
             Ok(())
         }
-    }
-
-    fn write(&mut self, buf: &[u8]) -> Result<(), BufferError> {
-        self.buffer.push(buf)
     }
 
     fn remaining_capacity(&self) -> usize {

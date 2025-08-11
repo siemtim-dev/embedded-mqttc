@@ -24,7 +24,7 @@ If you want to add one of the missing features, please submit a pull request.
 
 ## Other features
 
-- [ ] stable Rust support
+- [x] stable Rust support
 
 # License
 

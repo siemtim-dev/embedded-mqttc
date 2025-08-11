@@ -2,10 +2,14 @@ use core::{cell::Cell, ops::Deref};
 
 use crate::Buffer;
 
+/// A Reader to read from a buffer like from a byte slice
 pub trait BufferReader: Deref<Target = [u8]> {
+
+    /// Tells the reader that `n` bytes were read
     fn add_bytes_read(&self, n: usize);
 }
 
+/// An implementation of [`BufferReader`] for [`Buffer`]
 pub struct Reader <'a, T: AsMut<[u8]> + AsRef<[u8]>> {
     buffer: &'a mut Buffer<T>,
     bytes_read: Cell<usize>,
