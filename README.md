@@ -16,7 +16,7 @@ If you want to add one of the missing features, please submit a pull request.
 - [x] Subscribe
   - [x] Auto Subscribe to topic when connection ist established
 - [x] Unsubscribe
-- [ ] Last Will
+- [x] Last Will
 - [x] QoS 0
 - [x] QoS 1
 - [x] QoS 2
