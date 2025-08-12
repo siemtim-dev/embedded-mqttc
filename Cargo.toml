@@ -54,7 +54,7 @@ embassy-net = { version = ">= 0.5.0, < 0.7.0", optional = true, features = ["dns
 default = [ "std" ]
 embassy = [ "dep:embassy-time", "dep:embassy-net" ]
 std = [ "embassy-sync/std", "dep:tokio" ]
-defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "mqttrs2/defmt", "embassy-futures/defmt", "embytes-buffer/defmt" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "embassy-net/defmt", "mqttrs2/defmt", "embassy-futures/defmt", "embytes-buffer/defmt" ]
 tracing = [ "std", "dep:tracing" ]
 test_with_broker = [ "std" ]
 

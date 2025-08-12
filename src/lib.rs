@@ -83,6 +83,8 @@ pub enum MqttError {
     InternalError
 }
 
+
+
 #[derive(Clone)]
 pub struct ClientCredentials {
     pub username: String<32>,

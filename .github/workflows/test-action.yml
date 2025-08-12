@@ -54,5 +54,5 @@ jobs:
         with:
             toolchain: nightly
             override: true
-      - run: cargo test -F tracing -F test_with_broker
+      - run: cargo test -F std -F tracing -F test_with_broker
         working-directory: ./code

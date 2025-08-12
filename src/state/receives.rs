@@ -217,7 +217,7 @@ impl ReceivedPublishQueue {
 }
 
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use embytes_buffer::{new_stack_buffer, ReadWrite};
     use mqttrs2::{Packet, Pid, Publish, QosPid};

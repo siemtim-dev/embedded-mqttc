@@ -6,7 +6,7 @@ use embassy_futures::join::join;
 use embassy_net::{dns::{DnsQueryType, DnsSocket}, tcp::TcpSocket, IpAddress, IpEndpoint, Stack};
 use embedded_io_async::{ErrorKind, ErrorType, Read, ReadReady, Write, WriteReady};
 
-use crate::{NetworkConnection, NetworkError, TryRead, TryWrite};
+use crate::network::{NetworkConnection, NetworkError, TryRead, TryWrite};
 
 /// struct that contains the rx buffer and tx buffer for the tcp connection
 /// 
@@ -249,7 +249,7 @@ impl <'a> TryWrite for EmbassyNetworkConnection<'a> {
 }
 
 impl <'a> NetworkConnection for EmbassyNetworkConnection<'a> {
-    async fn connect(&mut self) -> Result<(), crate::NetworkError> {
+    async fn connect(&mut self) -> Result<(), NetworkError> {
         let ( rx_buffer, tx_buffer ) = unsafe {
             self.resources.unwrap_unsafe()
         };

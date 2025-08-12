@@ -234,7 +234,7 @@ impl <const N: usize> Write for BufferedStream<N> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod stream_tests {
     use super::BufferedStream;
 

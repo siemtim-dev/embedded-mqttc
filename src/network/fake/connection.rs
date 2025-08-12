@@ -196,7 +196,7 @@ impl <'a, const N: usize> ReadAtomic for ServerConnection<'a, N> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod connection_tests {
     use core::time::Duration;
 

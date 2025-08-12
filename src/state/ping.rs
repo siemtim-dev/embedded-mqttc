@@ -88,7 +88,7 @@ impl PingState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use crate::time::{self, Duration};
 

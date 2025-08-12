@@ -1,4 +1,3 @@
-#![cfg_attr(not(feature = "std"), no_std)]
 
 use core::future::Future;
 
@@ -6,9 +5,7 @@ use embytes_buffer::{Buffer, BufferReader, BufferWriter, ReadWrite};
 use embedded_io_async::{ErrorType, Read, ReadReady, Write, WriteReady};
 use thiserror::Error;
 
-
 use crate::fmt::Debug2Format;
-
 
 #[cfg(feature = "embassy")]
 pub mod embassy;

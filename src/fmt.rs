@@ -17,6 +17,13 @@ impl <T: Debug> Debug for Debug2Format<T> {
     }
 }
 
+#[cfg(feature = "defmt")]
+impl <T: Debug> defmt::Format for Debug2Format<T>  {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::Debug2Format(&self.0).format(fmt);
+    }
+}
+
 #[collapse_debuginfo(yes)]
 macro_rules! trace {
     ($s:literal $(, $x:expr)* $(,)?) => {

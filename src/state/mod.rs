@@ -91,6 +91,7 @@ impl <M: RawMutex> State<M> {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn get_connection_state(&self) -> ConnectionState {
         self.connection.lock(|inner|{
             inner.borrow().clone()
@@ -317,7 +318,7 @@ impl <M: RawMutex> State<M> {
 
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use core::time::Duration;
     use std::time::Instant;
