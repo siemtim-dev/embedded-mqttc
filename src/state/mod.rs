@@ -8,7 +8,7 @@ use embassy_sync::blocking_mutex;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::signal::Signal;
 use heapless::Vec;
-use mqttrs2::{encode_slice, Connack, Connect, Error, Packet, Protocol};
+use mqttrs2::{encode_slice, Connack, Connect, Error, LastWill, Packet, Protocol};
 use pid::PidSource;
 use ping::PingState;
 use publish::PublishQueue;
@@ -43,11 +43,13 @@ pub(crate) enum ConnectionState {
 
 }
 
-pub(crate) struct State<M: RawMutex> {
+pub(crate) struct State<'l, M: RawMutex> {
 
     connection: blocking_mutex::Mutex<M, RefCell<ConnectionState>>,
     config: ClientConfig,
     ping: blocking_mutex::Mutex<M, RefCell<PingState>>,
+
+    last_will: Option<LastWill<'l>>,
 
     pub(crate) publishes: PublishQueue,
     pub(crate) received_publishes: ReceivedPublishQueue,
@@ -61,13 +63,15 @@ pub(crate) struct State<M: RawMutex> {
 
 }
 
-impl <M: RawMutex> State<M> {
+impl <'l, M: RawMutex> State<'l, M> {
 
-    pub fn new(config: ClientConfig) -> Self {
+    pub fn new(config: ClientConfig, last_will: Option<LastWill<'l>>) -> Self {
         Self {
             connection: blocking_mutex::Mutex::new(RefCell::new(ConnectionState::InitialState)),
             config,
             ping: blocking_mutex::Mutex::new(RefCell::new(PingState::PingSuccess(time::now()))),
+
+            last_will: last_will,
 
             publishes: PublishQueue::new(),
             received_publishes: ReceivedPublishQueue::new(),
@@ -105,7 +109,7 @@ impl <M: RawMutex> State<M> {
             keep_alive: KEEP_ALIVE as u16,
             client_id: &self.config.client_id,
             clean_session: false,
-            last_will: None,
+            last_will: self.last_will.clone(),
             username: None,
             password: None
         };
@@ -326,7 +330,7 @@ mod tests {
     use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
     use heapless::{String, Vec};
-    use mqttrs2::{decode_slice_with_len, Connack, ConnectReturnCode, Packet, PacketType, QoS};
+    use mqttrs2::{decode_slice_with_len, Connack, ConnectReturnCode, LastWill, Packet, PacketType, QoS};
 
     use crate::{io::AsyncSender, state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
 
@@ -344,16 +348,24 @@ mod tests {
         }
     }
 
-    struct Test {
-        state: State<CriticalSectionRawMutex>,
+    struct Test<'t> {
+        state: State<'t, CriticalSectionRawMutex>,
         send_buffer: Buffer<[u8; 1024]>,
         control_ch: Channel<CriticalSectionRawMutex, MqttEvent, 16>
     }
 
-    impl Test {
+    impl <'t> Test<'t> {
         fn new (config: ClientConfig) -> Self {
             Self {
-                state: State::new(config),
+                state: State::new(config, None),
+                send_buffer: new_stack_buffer(),
+                control_ch: Channel::new()
+            }
+        }
+
+        fn new_with_last_will(config: ClientConfig, last_will: LastWill<'t>) -> Self {
+            Self {
+                state: State::new(config, Some(last_will)),
                 send_buffer: new_stack_buffer(),
                 control_ch: Channel::new()
             }
@@ -450,6 +462,63 @@ mod tests {
                 assert_eq!(c.client_id, "1234567890");
                 assert_eq!(c.password, None);
                 assert_eq!(c.username, None);
+            } else {
+                panic!("expected connect packet");
+            }
+        });
+
+        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+
+        let event = test.process_packet(&Packet::Connack(Connack{
+            session_present: false,
+            code: ConnectReturnCode::Accepted
+        })).await.unwrap().into_iter().next().expect("expected connected event");
+
+        assert_eq!(MqttEvent::Connected, event);
+
+        assert_eq!(test.state.get_connection_state(), ConnectionState::Connected);
+    }
+
+    #[tokio::test]
+    async fn test_connect_and_connack_with_last_will() {
+        time::test_time::set_default();
+
+        let mut config = ClientConfig{
+            client_id: String::new(),
+            credentials: None,
+            auto_subscribes: Vec::new()
+        };
+
+        config.client_id.push_str("1234567890").unwrap();
+
+        const LAST_WILL_TOPIC: &str = "some/topic";
+        const LAST_WILL_MESSAGE: &str = "i-am-dead";
+        let last_will = LastWill {
+            topic: LAST_WILL_TOPIC,
+            message: LAST_WILL_MESSAGE.as_bytes(),
+            qos: QoS::ExactlyOnce,
+            retain: true
+        };
+
+        let mut test = Test::new_with_last_will(config, last_will);
+
+        assert_eq!(test.state.get_connection_state(), ConnectionState::InitialState);
+
+        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+
+        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+
+        test.expect_packet(|p| {
+            if let Packet::Connect(c) = p {
+                assert_eq!(c.client_id, "1234567890");
+                assert_eq!(c.password, None);
+                assert_eq!(c.username, None);
+                
+                let received_last_will = c.last_will.as_ref().unwrap();
+                assert_eq!(received_last_will.message, LAST_WILL_MESSAGE.as_bytes());
+                assert_eq!(received_last_will.topic, LAST_WILL_TOPIC);
+                assert_eq!(received_last_will.qos, QoS::ExactlyOnce);
+                assert_eq!(received_last_will.retain, true);
             } else {
                 panic!("expected connect packet");
             }
