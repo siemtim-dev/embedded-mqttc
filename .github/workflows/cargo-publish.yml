@@ -10,6 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Wait for Tets
+      uses: kamilchodola/wait-for-workflow-action@1.1.0
+      with: 
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        workflow_id: test-action.yml
+        max_wait_minutes: 1
+        timeout: 120
+        repo_name: ${{ github.repository }}
+        org_name: github.repository_owner
+        ref: '${{ github.ref }}'
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
