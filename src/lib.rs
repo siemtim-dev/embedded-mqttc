@@ -84,7 +84,7 @@ pub enum MqttError {
 }
 
 
-
+/// Credentials used to connecto to the broker
 #[derive(Clone)]
 pub struct ClientCredentials {
     pub username: String<32>,
@@ -104,6 +104,9 @@ impl ClientCredentials {
     }
 }
 
+/// An [`AutoSubscribe`] is sent to the broker after connected.
+/// 
+/// It is also sent to the broker after reconnects. This should be the preferrd way to subscribe to topics.
 #[derive(Debug, Clone)]
 pub struct AutoSubscribe {
     pub topic: Topic,

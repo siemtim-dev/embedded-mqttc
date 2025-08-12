@@ -52,6 +52,9 @@ impl <M: RawMutex, T, const N: usize> AsyncReceiver<T> for Channel<M, T, N> {
     }
 }
 
+/// The main eventloop of the MQTT client
+/// 
+/// This struct holds all state an buffers for the mqtt client
 pub struct MqttEventLoop<'l, M: RawMutex, const B: usize> {
     recv_buffer: RefCell<Buffer<[u8; B]>>,
     send_buffer: RefCell<Buffer<[u8; B]>>,
@@ -64,6 +67,8 @@ pub struct MqttEventLoop<'l, M: RawMutex, const B: usize> {
 }
 
 impl <M: RawMutex, const B: usize> MqttEventLoop<'static, M, B> {
+
+    /// Create a new event loop
     pub fn new(config: ClientConfig) -> Self {
         
         Self {
@@ -95,6 +100,10 @@ impl <'l, M: RawMutex, const B: usize> MqttEventLoop<'l, M, B> {
         }
     }
 
+    /// Create a client for the event loop. The Client can be used to publish and receive messages, ...
+    /// 
+    /// There can be multiple [`MqttClient`] for one [`MqttEventLoop`].
+    /// But concurrent receives from multiple clients result in not all clients to receive all publishes
     pub fn client<'a>(&'a self) -> MqttClient<'a, M> {
         MqttClient{
             control_reveiver: &self.control_sender,
@@ -260,7 +269,7 @@ impl <'l, M: RawMutex, const B: usize> MqttEventLoop<'l, M, B> {
         self.send_buffer.borrow_mut().reset();
         self.recv_buffer.borrow_mut().reset();
         
-        let mut tries = 0;
+        let mut tries: usize = 0;
         loop {
 
             let result = connection.connect().await;
@@ -292,6 +301,7 @@ impl <'l, M: RawMutex, const B: usize> MqttEventLoop<'l, M, B> {
         // Select should never befinished because both jobs are infinite
         let network_future = self.work_network(connection);
         let request_future = self.work_request_receive();
+
         match select(network_future, request_future).await {
             embassy_futures::select::Either::First(net_result) => {
                 let err = net_result.unwrap_err();
@@ -376,7 +386,6 @@ mod test {
 
     use heapless::Vec;
 
-    // use crate::misc::MqttPacketReader;
     use crate::state::KEEP_ALIVE;
     use crate::time::Duration;
 
