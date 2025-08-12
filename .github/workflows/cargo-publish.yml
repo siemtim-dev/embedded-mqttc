@@ -10,27 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Wait for Tets
-      uses: kamilchodola/wait-for-workflow-action@1.1.0
-      with: 
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        workflow_id: test-action.yml
-        max_wait_minutes: 1
-        timeout: 120
-        repo_name: ${{ github.repository }}
-        org_name: github.repository_owner
-        ref: '${{ github.ref }}'
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
         override: true
     # See https://github.com/marketplace/actions/publish-crates
-    # Publish embytes-buffer
-    - uses: katyo/publish-crates@v2
-      with:
-        registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        path: ./embytes-buffer
-    # Publish main crate
+    # Publish crate
     - uses: katyo/publish-crates@v2
       with:
         registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
