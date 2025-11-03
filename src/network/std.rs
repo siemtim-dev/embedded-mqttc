@@ -1,137 +1,104 @@
-extern crate std;
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
+use core::future::Future;
+use std::io::ErrorKind;
 
-// #[cfg(all(feature = "defmt", feature = "std"))]
-// compile_error!("std cannot be logged with defmt!");
+use crate::network::NetworkError;
 
-use embedded_io_async::Write;
-use embedded_io_async::{ErrorKind, ErrorType, Read};
-use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-
-use crate::fmt::Debug2Format;
-
-use super::NetworkError;
-
-pub struct StdNetworkConnection<T: ToSocketAddrs> {
-    stream: Option<TcpStream>,
-    addr: T
+fn map_result<T>(result: Result<T, std::io::Error>) -> Result<T, NetworkError> {
+    result.map_err(|err| map_err(err))
 }
 
-impl <T: ToSocketAddrs> StdNetworkConnection<T> {
-    pub fn new(addr: T) -> Self {
+fn map_err(err: std::io::Error) -> NetworkError {
+    match err.kind() {
+        ErrorKind::ConnectionRefused => todo!(),
+        ErrorKind::ConnectionReset => NetworkError::ConnectionReset,
+        ErrorKind::HostUnreachable => todo!(),
+        ErrorKind::NetworkUnreachable => todo!(),
+        ErrorKind::ConnectionAborted => todo!(),
+        ErrorKind::NotConnected => todo!(),
+        ErrorKind::AddrInUse => todo!(),
+        ErrorKind::AddrNotAvailable => todo!(),
+        ErrorKind::NetworkDown => todo!(),
+        
+        ErrorKind::TimedOut => NetworkError::Timeout,
+
+        ErrorKind::PermissionDenied |
+        ErrorKind::WouldBlock |
+        ErrorKind::StaleNetworkFileHandle |
+        ErrorKind::InvalidInput |
+        ErrorKind::InvalidData |
+        ErrorKind::WriteZero |
+        ErrorKind::ResourceBusy |
+        ErrorKind::Interrupted |
+        ErrorKind::Unsupported |
+        ErrorKind::UnexpectedEof |
+        ErrorKind::OutOfMemory |
+        ErrorKind::Other => {
+            warn!("unexpected networ error {}", err);
+            NetworkError::Unexpected
+        },
+
+        e => panic!("unexpected error kind from network: {}", e),
+    }
+}
+
+pub struct StdNetwork<'a> {
+    host: &'a str,
+    port: u16
+}
+
+impl<'a> StdNetwork<'a> {
+
+    pub fn new(host: &'a str, port: u16) -> Self {
         Self {
-            stream: None,
-            addr
+            host, port
         }
     }
+
 }
 
-impl <T: ToSocketAddrs> Unpin for StdNetworkConnection<T> {}
+impl <'a> super::PlattformNetwork for StdNetwork<'a> {
+    type Connection<'r> = TcpStream;
 
-impl <T: ToSocketAddrs> ErrorType for StdNetworkConnection<T> {
-    type Error = embedded_io_async::ErrorKind;
-}
-
-impl <T: ToSocketAddrs> super::TryRead for StdNetworkConnection<T> {
-    async fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let result = self.stream.as_mut().ok_or(ErrorKind::Other)?
-            .try_read(buf);
-
-        match result {
-            Ok(n) => {
-                if n == 0 && ! buf.is_empty(){
-                    warn!("std net try_read: read 0 bytes");
-                    Err(ErrorKind::ConnectionReset)
-                } else {
-                    Ok(n)
-                }
-            },
-            Err(e) => {
-                if e.kind() == tokio::io::ErrorKind::WouldBlock {
-                    trace!("try_read: network would block");
-                    Ok(0) 
-                } else { 
-                    error!("error try_reading from std net: {}", Debug2Format(e));
-                    Err(ErrorKind::Other) 
-                }
-            }
+    fn write<'b>(buf: &'b [u8], connection: &'b mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'b {
+        async {
+            map_result(connection.write(buf).await)
         }
     }
-}
 
-impl <T: ToSocketAddrs> super::TryWrite for StdNetworkConnection<T> {
-    async fn try_write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let result = self.stream.as_mut().ok_or(ErrorKind::Other)?
-            .try_write(buf);
-
-        match result {
-            Ok(n) => {
-                if n == 0 && ! buf.is_empty(){
-                    warn!("std net try_write: 0 written bytes");
-                    Err(ErrorKind::ConnectionReset)
-                } else {
-                    Ok(n)
-                }
-            },
-            Err(e) => {
-                if e.kind() == tokio::io::ErrorKind::WouldBlock {
-                    trace!("try_write: network would block");
-                    Ok(0) 
-                } else { 
-                    error!("error try_writing to std net: {:?}", Debug2Format(e));
-                    Err(ErrorKind::Other) 
-                }
-            }
+    fn try_write(buf: &[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError> {
+        match connection.try_write(buf) {
+            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(0),
+            Ok(n) => Ok(n),
+            Err(err) => Err(map_err(err)),
         }
     }
-}
 
-impl <T: ToSocketAddrs> Read for StdNetworkConnection<T> {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.stream.as_ref().ok_or(ErrorKind::Other)?.readable().await
-        .map_err(|e| {
-            error!("error waiting for std net to be readable: {}", Debug2Format(e));
-            ErrorKind::Other
-        })?;
-
-        let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
-            .read(buf).await
-            .map_err(|e| {
-                error!("error reading from std net: {}", Debug2Format(e));
-                ErrorKind::Other
-            })?;
-
-        if n == 0 && ! buf.is_empty(){
-            warn!("std net read: read 0 bytes");
-            return Err(ErrorKind::ConnectionReset);
+    fn flush<'b>(connection: &'b mut Self::Connection<'_>) -> impl Future<Output = Result<(), NetworkError>> + 'b {
+        async {
+            map_result(connection.flush().await)
         }
-        Ok(n)
     }
-}
 
-impl <T: ToSocketAddrs> Write for StdNetworkConnection<T> {
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let n = self.stream.as_mut().ok_or(ErrorKind::Other)?
-            .write(buf).await
-            .map_err(|e| {
-                error!("error writing to std net: {}", Debug2Format(e));
-                ErrorKind::Other
-            })?;
-
-        if n == 0 && ! buf.is_empty(){
-            warn!("std net write: 0 written bytes");
-            return Err(ErrorKind::ConnectionReset);
+    fn read<'b>(buf: &'b mut[u8], connection: &'b mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'b {
+        async {
+            map_result(connection.read(buf).await)
         }
-        Ok(n)
     }
-}
 
-impl <T: ToSocketAddrs> super::NetworkConnection for StdNetworkConnection<T> {
-    async fn connect(&mut self) -> Result<(), NetworkError> {
-        let stream: TcpStream = TcpStream::connect(&self.addr).await
-            .map_err(|_| NetworkError::ConnectionFailed)?;
-        self.stream = Some(stream);
-        Ok(())
+    fn try_read(buf: &mut[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError> {
+        match connection.try_read(buf) {
+            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(0),
+            Ok(n) => Ok(n),
+            Err(err) => Err(map_err(err)),
+        }
     }
+
+    fn close(_connection: Self::Connection<'_>) {}
+
+    async fn connect(&self) -> Result<Self::Connection<'_>, NetworkError> {
+        let addr = (self.host, self.port);
+        let stream = map_result(TcpStream::connect(addr).await)?;
+        Ok(stream)
+    }   
 }

@@ -1,11 +1,6 @@
+use core::{fmt::Debug, future::Future};
 
-use core::future::Future;
 
-use embytes_buffer::{Buffer, BufferReader, BufferWriter, ReadWrite};
-use embedded_io_async::{ErrorType, Read, ReadReady, Write, WriteReady};
-use thiserror::Error;
-
-use crate::fmt::Debug2Format;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -13,188 +8,209 @@ pub mod embassy;
 #[cfg(feature = "std")]
 pub mod std;
 
-pub mod fake;
+#[cfg(test)]
+pub mod test;
 
-pub mod mqtt;
-
-#[derive(Debug, PartialEq, Clone, Error)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum NetworkError {
+    #[deprecated]
+    #[error("error while reading or writing")]
+    ReadWriteError,
 
-    #[error("Could not find host")]
+    #[error("host not found")]
     HostNotFound,
 
-    #[error("DNS Request failed")]
-    DnsFailed,
+    #[error("hconnection reset")]
+    ConnectionReset,
 
-    #[error("sending / retrieving from network failed")]
-    ConnectionFailed,
+    #[error("network timeout")]
+    Timeout,
 
-    #[cfg(feature = "embassy")]
-    #[error("failed to connect to tcp endpoint")]
-    ConnectError(embassy_net::tcp::ConnectError),
+    #[error("dns failed: `{0}`")]
+    DnsFailed(&'static str),
+
+    #[error("unexpected network error")]
+    Unexpected
 }
 
 #[cfg(feature = "embassy")]
 impl From<embassy_net::tcp::ConnectError> for NetworkError {
     fn from(value: embassy_net::tcp::ConnectError) -> Self {
-        Self::ConnectError(value)
-    }
-}
-
-
-
-pub trait TryRead: ErrorType {
-    fn try_read(&mut self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Self::Error>>;
-}
-
-impl <T> TryRead for T where T: Read + ReadReady{
-    async fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        if self.read_ready()? {
-            self.read(buf).await
-        } else {
-            Ok(0)
+        match value {
+            embassy_net::tcp::ConnectError::InvalidState => todo!(),
+            embassy_net::tcp::ConnectError::ConnectionReset => todo!(),
+            embassy_net::tcp::ConnectError::TimedOut => Self::Timeout,
+            embassy_net::tcp::ConnectError::NoRoute => todo!(),
         }
     }
 }
 
-pub trait TryWrite: ErrorType {
-    fn try_write(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, Self::Error>>;
-}
-
-impl <T> TryWrite for T where T: Write + WriteReady{
-    async fn try_write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        if self.write_ready()? {
-            self.write(buf).await
-        } else {
-            Ok(0)
-        }
+#[cfg(feature = "embassy")]
+impl From<embassy_net::dns::Error> for NetworkError {
+    fn from(value: embassy_net::dns::Error) -> Self {
+        Self::DnsFailed(match value {
+            embassy_net::dns::Error::InvalidName => "invalid name",
+            embassy_net::dns::Error::NameTooLong => "name too long",
+            embassy_net::dns::Error::Failed => "failed",
+        })
     }
 }
 
-pub trait NetworkConnection: Read + Write + TryWrite + TryRead + ErrorType {
-
-    /// Used to establish a connection and reconnect after a connection fail
-    fn connect(&mut self) -> impl Future<Output = Result<(), NetworkError>>;
-    
+#[cfg(feature = "embassy")]
+impl From<embassy_net::tcp::Error> for NetworkError {
+    fn from(value: embassy_net::tcp::Error) -> Self {
+        match value {
+            embassy_net::tcp::Error::ConnectionReset => Self::ConnectionReset,
+        }
+    }
 }
 
-pub trait NetwordSendReceive {
-    fn send_all(&mut self, buffer: &mut impl BufferReader) -> impl Future<Output = Result<(), NetworkError>>;
-    fn send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> impl Future<Output = Result<usize, NetworkError>>;
-    fn try_send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> impl Future<Output = Result<usize, NetworkError>>;
 
-    fn receive<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> impl Future<Output = Result<usize, NetworkError>>;
-    fn try_receive<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> impl Future<Output = Result<usize, NetworkError>>;
+pub trait PlattformNetwork {
+    type Connection<'c>;
 
+    fn write<'a>(buf: &'a [u8], connection: &'a mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'a;
+    fn try_write(buf: &[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError>;
+    fn flush<'a>(connection: &'a mut Self::Connection<'_>) -> impl Future<Output = Result<(), NetworkError>> + 'a;
+
+    fn read<'a>(buf: &'a mut[u8], connection: &'a mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'a;
+    fn try_read(buf: &mut[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError>;
+
+    fn close(connection: Self::Connection<'_>);
+
+    fn connect<'a>(&'a self) -> impl Future<Output = Result<Self::Connection<'a>, NetworkError>>;
 }
 
-impl <C> NetwordSendReceive for C where C: NetworkConnection {
+// pub struct BufferedNetwork<'a, const BUFFER_SIZE: usize, NETWORK> where NETWORK: PlattformNetwork  {
+//     recv_buffer: RefCell<StackBuffer<BUFFER_SIZE>>,
+//     send_buffer: RefCell<StackBuffer<BUFFER_SIZE>>,
+//     network: &'a NETWORK,
+// }
 
-    async fn send_all(&mut self, buffer: &mut impl BufferReader) -> Result<(), NetworkError> {
-        self.write_all(buffer)
-            .await.map_err(|e| {
-                error!("error sending to network: {}", Debug2Format(e));
-                NetworkError::ConnectionFailed
-            })?;
+// impl <'a, const BUFFER_SIZE: usize, NETWORK> BufferedNetwork<'a, BUFFER_SIZE, NETWORK> where NETWORK: PlattformNetwork {
 
-        Ok(())
-    }
+//     pub fn new(network: &'a NETWORK) -> Self {
+//         Self {
+//             recv_buffer: RefCell::new(StackBuffer::new()),
+//             send_buffer: RefCell::new(StackBuffer::new()),
+//             network,
+//         }
+//     }
 
-    /// Send data from the buffer to the network and block is the network is not ready
-    async fn send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, NetworkError> {
-        let reader = buf.create_reader();
-        let result = self.write(&reader[..]).await
-            .map_err(|e| {
-                error!("error sending to network: {}", Debug2Format(e));
-                NetworkError::ConnectionFailed
-            });
-        match result {
-            Ok(n) => {
-                reader.add_bytes_read(n);
-                trace!("sent {} bytes to network", n);
-                Ok(n)
-            },
-            Err(e) => {
-                Err(e)
-            },
-        }
-    }
+//     pub fn read_packet<F, U>(&self, f: F) -> Result<Option<U>, MqttError> where F: FnOnce(Packet<'_>) -> U, U: Send {
+//         let reader = self.recv_buffer.create_reader();
 
-    async fn try_send<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, NetworkError> {
+//         reader.read_slice(|buf| {
+//             match decode_slice_with_len(buf) {
+//                 Ok(Some((bytes_read, p))) => {
+//                     (bytes_read, Ok(Some(f(p))))
+//                 },
+//                 Ok(None) => (0, Ok(None)),
+//                 Err(err) => (0, Err(MqttError::CodecError(err)))
+//             }
+//         }).unwrap() // error only occures if a wrong number of bytes is returned by the closure. 
+//     }
 
-        let reader = buf.create_reader();
-        let result = self.try_write(&reader[..]).await
-            .map_err(|e| {
-                error!("error try_sending to network: {}", Debug2Format(e));
-                NetworkError::ConnectionFailed}
-            );
-        match result {
-            Ok(n) => {
-                reader.add_bytes_read(n);
-                trace!("sent {} bytes to network", n);
-                Ok(n)
-            },
-            Err(e) => {
-                Err(e)
-            },
-        }
-    }
+//     pub async fn write_packet(&self, packet: &Packet<'_>) -> Result<(), MqttError> {
+//         let writer = self.send_buffer.create_writer();
+//         writer.write_slice_async(|buf| {
+//             match encode_slice(&packet, buf) {
+//                 Ok(bytes_written) => WriteSliceAsyncResult::Ready(bytes_written, Ok(())),
+//                 Err(mqttrs2::Error::WriteZero) => WriteSliceAsyncResult::Wait,
+//                 Err(err) => WriteSliceAsyncResult::Ready(0, Err(MqttError::CodecError(err)))
+//             }
+//         }).await.unwrap() // error only occures if a wrong number of bytes is returned by the closure. 
+//     }
 
-    async fn receive<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, NetworkError> {
-        if ! buf.ensure_remaining_capacity() {
-            warn!("cannot receive from network: buffer is full");
-            return Ok(0);
-        }
-        
-        let mut writer = buf.create_writer();
+//     pub fn try_write_packet(&self, packet: &Packet<'_>) -> Result<bool, MqttError> {
+//         let writer = self.send_buffer.create_writer();
+//         writer.write_slice(|buf| {
+//             match encode_slice(&packet, buf) {
+//                 Ok(bytes_written) => (bytes_written, Ok(true)),
+//                 Err(mqttrs2::Error::WriteZero) => (0, Ok(false)),
+//                 Err(err) => (0, Err(MqttError::CodecError(err)))
+//             }
+//         }).unwrap() 
+//     }
 
-        let result = self.read(&mut writer).await
-            .map_err(|e| {
-                error!("error receive from network: {}", Debug2Format(e));
-                NetworkError::ConnectionFailed
-            });
+//     pub fn tcp_connect(&self) -> impl Future<Output = Result<NETWORK::Connection<'a>, NETWORK::Error>> {
+//         self.network.connect()
+//     }
 
-        match result {
-            Ok(n) => {
-                // Error is unwrapped because read() should ensure that not too many bytes are written
-                writer.commit(n).unwrap();
+//     pub async fn write_network_all(&self, connection: &mut NETWORK::Connection<'_>) -> Result<(), NetworkError> {
+//         let send_buffer_reader = self.send_buffer.create_reader();
 
-                trace!("received {} bytes from network", n);
-                Ok(n)
-            },
-            Err(e) => {
-                Err(e)
-            },
-        }
-    }
+//         while send_buffer_reader.len() > 0 {
+//             let lock = send_buffer_reader.lock().await;
+//             match NETWORK::write(&lock, connection).await {
+//                 Ok(bytes_written) => {
+//                     debug!("write_network_all:write  {} bytes to network", bytes_written);
+//                     lock.set_bytes_read(bytes_written).unwrap();
+//                 },
+//                 Err(err) => {
+//                     error!("error writing to network: {}", err);
+//                     return Err(NetworkError::ReadWriteError);
+//                 }
+//             }
+//         }
+//         Ok(())
+//     }
 
-    async fn try_receive<T: AsMut<[u8]> + AsRef<[u8]>>(&mut self, buf: &mut Buffer<T>) -> Result<usize, NetworkError> {
-        if ! buf.ensure_remaining_capacity() {
-            warn!("cannot receive from network: buffer is full");
-            return Ok(0);
-        }
-        
-        let mut writer = buf.create_writer();
+//     pub fn try_write_network(&self, connection: &mut NETWORK::Connection<'_>) -> Result<(), NetworkError> {
+//         let send_buffer_reader = self.send_buffer.create_reader();
 
-        let result = self.try_read(&mut writer).await
-            .map_err(|e| {
-                error!("error try_receive from network: {}", Debug2Format(e));
-                NetworkError::ConnectionFailed
-            });
+//         send_buffer_reader.read_slice(|buf| {
+//             match NETWORK::try_write(buf, connection) {
+//                 Ok(bytes_written) => {
+//                     debug!("try_write {} bytes to network", bytes_written);
+//                     (bytes_written, Ok(()))
+//                 },
+//                 Err(err) => {
+//                     error!("error writing to network: {}", err);
+//                     (0, Err(NetworkError::ReadWriteError))
+//                 }
+//             }
+//         }).unwrap()
+//     }
 
-        match result {
-            Ok(n) => {
-                // Error is unwrapped because read() should ensure that not too many bytes are written
-                writer.commit(n).unwrap();
+//     pub async fn read_write_network(&self, connection: &mut NETWORK::Connection<'_>) -> Result<(), NetworkError> {
 
-                trace!("received {} bytes from network", n);
-                Ok(n)
-            },
-            Err(e) => {
-                Err(e)
-            },
-        }
-    }
+//         let send_buffer_reader = self.send_buffer.create_reader();
+//         let recv_buffer_writer = self.recv_buffer.create_writer();
 
-}
+//         if send_buffer_reader.len() > 0 {
+//             let send_buffer_lock = send_buffer_reader.lock().await;
+//             let bytes_written = NETWORK::try_write(&send_buffer_lock, connection)
+//                 .map_err(|err| {
+//                     error!("error writing to network: {}", err);
+//                     NetworkError::ReadWriteError
+//                 })?;
+//             send_buffer_lock.set_bytes_read(bytes_written).unwrap();
+//         }
+
+//         if send_buffer_reader.len() > 0 {
+//             // Send buffer has something to send left, just try receive
+//             let mut recv_buffer_lock = recv_buffer_writer.lock().await;
+//             let bytes_read = NETWORK::try_read(&mut recv_buffer_lock, connection)
+//                 .map_err(|err| {
+//                     error!("error try_reading from network: {}", err);
+//                     NetworkError::ReadWriteError
+//                 })?;
+//             recv_buffer_lock.commit(bytes_read).unwrap();
+//         } else {
+//             // Send buffer empty, blocking read
+//             let mut recv_buffer_lock = recv_buffer_writer.lock().await;
+//             let bytes_read = NETWORK::read(&mut recv_buffer_lock, connection).await
+//                 .map_err(|err| {
+//                     error!("error try_reading from network: {}", err);
+//                     NetworkError::ReadWriteError
+//                 })?;
+//             recv_buffer_lock.commit(bytes_read).unwrap();
+//         }
+
+//         Ok(())
+//     }
+
+// }
+
+

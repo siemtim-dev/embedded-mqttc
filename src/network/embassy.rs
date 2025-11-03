@@ -1,16 +1,56 @@
 
-
-use core::mem;
+use core::{cell::UnsafeCell, future::Future, mem, pin::Pin, ptr, sync::atomic::{AtomicBool, Ordering}, task::{Context, Poll, RawWaker, RawWakerVTable, Waker}};
 
 use embassy_futures::join::join;
 use embassy_net::{dns::{DnsQueryType, DnsSocket}, tcp::TcpSocket, IpAddress, IpEndpoint, Stack};
-use embedded_io_async::{ErrorKind, ErrorType, Read, ReadReady, Write, WriteReady};
 
-use crate::network::{NetworkConnection, NetworkError, TryRead, TryWrite};
+use crate::network::NetworkError;
 
-/// struct that contains the rx buffer and tx buffer for the tcp connection
-/// 
-/// the buffers are of size N
+/// --- Dummy-Waker (no-op) --------------------------------------------------
+/// Ein sicherer, no-op RawWaker / Waker, ausreichend um ein Future einmal zu pollen.
+unsafe fn raw_waker_clone(_: *const ()) -> RawWaker {
+    RawWaker::new(ptr::null(), &RAW_WAKER_VTABLE)
+}
+unsafe fn raw_waker_wake(_: *const ()) {}
+unsafe fn raw_waker_wake_by_ref(_: *const ()) {}
+unsafe fn raw_waker_drop(_: *const ()) {}
+
+static RAW_WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(
+        raw_waker_clone,
+        raw_waker_wake,
+        raw_waker_wake_by_ref,
+        raw_waker_drop,
+    );
+
+fn dummy_waker() -> Waker {
+    // RawWaker trägt keine Daten; pointer ist null, VTable verweist auf no-op-ops.
+    let raw = RawWaker::new(ptr::null(), &RAW_WAKER_VTABLE);
+    // Safety: raw erfüllt die invariants unserer no-op-Implementierung.
+    unsafe { Waker::from_raw(raw) }
+}
+
+/// --- Variante 1: Für Unpin-Futures (einfach) ------------------------------
+pub fn poll_once_unpin<F>(mut fut: F) -> Poll<F::Output>
+where
+    F: Future + Unpin,
+{
+    let waker = dummy_waker();
+    let mut cx = Context::from_waker(&waker);
+    // Pin::new ist sicher, da F: Unpin
+    Pin::new(&mut fut).poll(&mut cx)
+}
+
+/// --- Variante 2: Für bereits gepinnte Futures ------------------------------
+pub fn poll_once_pin<F>(fut: Pin<&mut F>) -> Poll<F::Output>
+where
+    F: Future,
+{
+    let waker = dummy_waker();
+    let mut cx = Context::from_waker(&waker);
+    fut.poll(&mut cx)
+}
+
 pub struct EmbassyConnectionStackResources<const N: usize> {
     rx_buffer: [u8; N],
     tx_buffer: [u8; N]
@@ -31,45 +71,7 @@ impl <const N: usize> EmbassyConnectionStackResources<N> {
             tx_buffer: &mut self.tx_buffer[..]
         }
     }
-
-    /*
-    pub fn borrow2<'a>(&'a mut self) -> EmbassyConnectionResources2<'a, N> {
-        EmbassyConnectionResources2{
-            rx_buffer: &mut self.rx_buffer as *mut u8,
-            tx_buffer: &mut self.tx_buffer as *mut u8,
-            _phantom_data: PhantomData
-        }
-    }
-    */
 }
-
-/*
-pub struct EmbassyConnectionResources2<'a, const N: usize> {
-    rx_buffer: *mut u8,
-    tx_buffer: *mut u8,
-    _phantom_data: PhantomData<&'a mut u8>
-}
-
-impl <'a, const N: usize> EmbassyConnectionResources2<'a, N> {
-
-    pub fn unwrap(&'a mut self) -> (&'a mut [u8], &'a mut [u8]) {
-        unsafe {
-            (
-                slice::from_raw_parts_mut(self.rx_buffer, N),
-                slice::from_raw_parts_mut(self.tx_buffer, N)
-            )
-        }
-    }
-
-    unsafe fn unwrap_static(&self) -> (&'static mut [u8], &'static mut [u8]) {
-        (
-            slice::from_raw_parts_mut(self.rx_buffer, N),
-            slice::from_raw_parts_mut(self.tx_buffer, N)
-        )
-
-    }
-}
-*/
 
 /// struct that contains the pointers to the rx buffer and tx buffer
 pub struct EmbassyConnectionResources<'a> {
@@ -98,42 +100,56 @@ impl <'a> EmbassyConnectionResources<'a> {
     }
 }
 
-pub struct EmbassyNetworkConnection<'a> {
-    socket: Option<TcpSocket<'a>>,
-    stack: Stack<'a>,
-    resources: EmbassyConnectionResources<'a>,
-    host: &'a str,
-    port: u16
+pub struct EmbassyNetworkConnection<'a>{
+    resources_in_use: &'a AtomicBool,
+    socket: TcpSocket<'a>
 }
 
-impl <'a> EmbassyNetworkConnection<'a> {
+impl <'a> Drop for EmbassyNetworkConnection<'a> {
+    fn drop(&mut self) {
+        self.resources_in_use.store(false, Ordering::Release);
+    }
+}
+
+pub struct EmbassyNetwork<'a> {
+    host: &'a str,
+    port: u16,
+    stack: Stack<'a>,
+    
+    resources: UnsafeCell<EmbassyConnectionResources<'a>>,
+    resources_in_use: AtomicBool
+}
+
+impl <'a> EmbassyNetwork<'a> {
 
     pub fn new(host: &'a str, port: u16, stack: Stack<'a>, resources: EmbassyConnectionResources<'a>) -> Self {
         Self {
-            socket: None,
-            stack, resources, 
-            host, port
+            host,
+            port,
+            stack,
+            resources: UnsafeCell::new(resources),
+            resources_in_use: AtomicBool::new(false)
         }
     }
 
-    async fn dns_resolve(&self, hostname: &str) -> Result<IpAddress, NetworkError> {
+    async fn dns_resolve(&self) -> Result<IpAddress, NetworkError> {
         let dns_client = DnsSocket::new(self.stack);
 
         let ip_v6_future = async {
-            let result = dns_client.query(hostname, DnsQueryType::Aaaa).await;
+            let result = dns_client.query(self.host, DnsQueryType::Aaaa).await;
 
             match result {
                 Ok(addrs) => {
                     if let Some(addr) = addrs.into_iter().next() {
-                        info!("dns aaaa: {} -> {}", hostname, addr);
+                        info!("dns aaaa: {} -> {}", self.host, addr);
                         Ok(Some(addr))
                     } else {
-                        info!("dns aaaa: {} -> nothing", hostname);
+                        info!("dns aaaa: {} -> nothing", self.host);
                         Ok(None)
                     }
                 },
                 Err(embassy_net::dns::Error::InvalidName) => {
-                    info!("dns aaaa: {} -> invalid name", hostname);
+                    info!("dns aaaa: {} -> invalid name", self.host);
                     Ok(None)
                 },
                 Err(e) => Err(e)
@@ -141,20 +157,19 @@ impl <'a> EmbassyNetworkConnection<'a> {
         };
 
         let ip_v4_future = async {
-            let result = dns_client.query(hostname, DnsQueryType::A).await;
+            let result = dns_client.query(self.host, DnsQueryType::A).await;
 
-            match result {
-                Ok(addrs) => {
-                    if let Some(addr) = addrs.into_iter().next() {
-                        info!("dns a: {} -> {}", hostname, addr);
-                        Ok(Some(addr))
-                    } else {
-                        info!("dns a: {} -> nothing", hostname);
+            match result.map(|addrs| addrs.into_iter().next()) {
+                Ok(Some(addr)) => {
+                    info!("dns a: {} -> {}", self.host, addr);
+                    Ok(Some(addr))
+                },
+                Ok(None) => {
+                    info!("dns a: {} -> nothing", self.host);
                         Ok(None)
-                    }
-                }
+                },
                 Err(embassy_net::dns::Error::InvalidName) => {
-                    info!("dns a: {} -> invalid name", hostname);
+                    info!("dns a: {} -> invalid name", self.host);
                     Ok(None)
                 },
                 Err(e) => Err(e)
@@ -162,97 +177,85 @@ impl <'a> EmbassyNetworkConnection<'a> {
         };
         
         let (r_v4, r_v6) = join(ip_v4_future, ip_v6_future).await;
-        let r_v4 = r_v4.map_err(|e| {
-            error!("DNS A request failed: {}", e);
-            NetworkError::DnsFailed
-        })?;
-
-        let r_v6 = r_v6.map_err(|e| {
-            error!("DNS AAAA request failed: {}", e);
-            NetworkError::DnsFailed
-        })?;
-
-        r_v4.or(r_v6).ok_or(NetworkError::HostNotFound)
+        match (r_v4, r_v6) {
+            (_, Ok(Some(v6))) => Ok(v6),
+            (Ok(Some(v4)), _) => Ok(v4),
+            (_, Ok(None)) |
+            (Ok(None), _) => Err(NetworkError::HostNotFound),
+            (Err(err), _) => Err(err.into()),
+        }
     }
 
-    async fn connect_intern(&mut self, rx_buffer: &'a mut [u8], tx_buffer: &'a mut [u8]) -> Result<(), NetworkError> {
-        let addr = self.dns_resolve(&self.host).await?;
+}
 
-        if let Some(mut socket) = self.socket.take() {
-            trace!("closing existing socket");
-            socket.close();
+impl <'a> super::PlattformNetwork for EmbassyNetwork<'a> {
+    type Connection<'r> = EmbassyNetworkConnection<'r>;
+
+    fn write<'c>(buf: &'c [u8], connection: &'c mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'c {
+        async {
+            connection.socket.write(buf).await.map_err(|err| err.into())
         }
+    }
+
+    fn try_write(buf: &[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError> {
+        let mut write_future = connection.socket.write(buf);
+        let write_future = Pin::new(&mut write_future);
+        match poll_once_pin(write_future) {
+            Poll::Ready(result) => result.map_err(|err| err.into()),
+            Poll::Pending => Ok(0),
+        } 
+    }
+
+    fn flush<'c>(connection: &'c mut Self::Connection<'_>) -> impl Future<Output = Result<(), super::NetworkError>> + 'c {
+        async {
+            connection.socket.flush().await.map_err(|err| err.into())
+        }
+    }
+
+    fn read<'c>(buf: &'c mut[u8], connection: &'c mut Self::Connection<'_>) -> impl Future<Output = Result<usize, NetworkError>> + 'c {
+        async {
+            connection.socket.read(buf).await.map_err(|err| err.into())
+        }
+    }
+
+    fn try_read(buf: &mut[u8], connection: &mut Self::Connection<'_>) -> Result<usize, NetworkError> {
+        let mut read_future = connection.socket.read(buf);
+        let read_future = Pin::new(&mut read_future);
+        match poll_once_pin(read_future) {
+            Poll::Ready(result) => result.map_err(|err| err.into()),
+            Poll::Pending => Ok(0),
+        }
+    }
+
+    fn close(mut connection: Self::Connection<'_>) {
+        connection.socket.close();
+    }
+
+    async fn connect<'r>(&'r self) -> Result<Self::Connection<'r>, NetworkError> {
+        let ( rx_buffer, tx_buffer ) = unsafe {
+            let resources = self.resources.get();
+            (*resources).unwrap_unsafe() 
+        };
+
+        let was_in_use = self.resources_in_use.swap(true, Ordering::AcqRel);
+        assert!(!was_in_use);
+
+        let addr = self.dns_resolve().await?;
 
         let mut socket = TcpSocket::new(self.stack, rx_buffer, tx_buffer);
-        // socket.set_keep_alive(Some(Duration::from_secs(10)));
 
-        let endpoint = IpEndpoint{
+        let endpoint = IpEndpoint {
             addr,
             port: self.port
         };
         
         info!("connecting...");
-        socket.connect(endpoint).await.map_err(|e| {
-            error!("tcp connection failed: {}", e);
-            NetworkError::from(e)
-        })?;
+        socket.connect(endpoint).await?;
+        info!("connected");
 
-        self.socket = Some(socket);
-        
-        Ok(())
-    }
-
-}
-
-impl <'a> Unpin for EmbassyNetworkConnection<'a> {}
-
-impl <'a> ErrorType for EmbassyNetworkConnection<'a> {
-    type Error = ErrorKind;
-}
-
-impl <'a> Write for EmbassyNetworkConnection<'a> {
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let socket = self.socket.as_mut().ok_or(ErrorKind::ConnectionAborted)?;
-        socket.write(buf).await
-            .map_err(|_| ErrorKind::ConnectionReset)
-    }
-}
-
-impl <'a> Read for EmbassyNetworkConnection<'a> {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let socket = self.socket.as_mut().ok_or(ErrorKind::ConnectionAborted)?;
-        socket.read(buf).await
-            .map_err(|_| ErrorKind::ConnectionReset)
-    }
-}
-
-impl <'a> TryRead for EmbassyNetworkConnection<'a> {
-    async fn try_read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let socket = self.socket.as_mut().ok_or(ErrorKind::ConnectionAborted)?;
-        if socket.read_ready().map_err(|_| ErrorKind::ConnectionReset)? {
-            self.read(buf).await
-        } else {
-            Ok(0)
-        }
-    }
-}
-
-impl <'a> TryWrite for EmbassyNetworkConnection<'a> {
-    async fn try_write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let socket = self.socket.as_mut().ok_or(ErrorKind::ConnectionAborted)?;
-        if socket.write_ready().map_err(|_| ErrorKind::ConnectionReset)? {
-            self.write(buf).await
-        } else {
-            Ok(0)
-        }
-    }
-}
-
-impl <'a> NetworkConnection for EmbassyNetworkConnection<'a> {
-    async fn connect(&mut self) -> Result<(), NetworkError> {
-        let ( rx_buffer, tx_buffer ) = unsafe {
-            self.resources.unwrap_unsafe()
-        };
-        self.connect_intern(rx_buffer, tx_buffer).await
+        Ok(Self::Connection{
+            socket,
+            resources_in_use: &self.resources_in_use
+        })
     }
 }

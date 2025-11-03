@@ -1,58 +1,35 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::{cell::Cell, ops::Deref};
+use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
-use heapless::String;
+use heapless::{Deque, String};
 use thiserror::Error;
 
 use heapless::Vec;
 
-pub use embytes_buffer::*;
-
-use mqttrs2::{Pid, Publish, QosPid};
+use mqttrs2::{Pid, QosPid};
 pub use mqttrs2::QoS;
 
 // This must come first so the macros are visible
 pub(crate) mod fmt;
 
-pub mod io;
-pub(crate) mod state;
-use state::sub::MAX_CONCURRENT_REQUESTS;
+pub mod state;
 
 pub(crate) mod time;
 pub mod client;
 
-pub(crate) mod misc;
+pub(crate) mod buffer;
 
-pub mod queue_vec;
+pub mod packet;
 
 pub mod network;
 
+pub(crate) mod mutex;
 
-static COUNTER: Mutex<CriticalSectionRawMutex, Cell<u64>> = Mutex::new(Cell::new(0));
+#[cfg(test)]
+pub mod testutils;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct UniqueID(u64);
-
-impl UniqueID {
-    pub fn new() -> Self {
-        Self(COUNTER.lock(|inner|{
-            let value = inner.get();
-            inner.set(value + 1);
-            value
-        }))
-    }
-}
-
-impl Deref for UniqueID {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[derive(Debug, Error, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -61,8 +38,8 @@ pub enum MqttError {
     #[error("TCP Connection failed")]
     ConnectionFailed(network::NetworkError),
 
-    #[error("The buffer is full")]
-    BufferFull,
+    #[error("buffer too small")]
+    BufferTooSmall,
 
     #[error("connection rejected by broker")]
     ConnackError,
@@ -71,7 +48,7 @@ pub enum MqttError {
     AuthenticationError,
 
     #[error("Error while encoding and decoding packages")]
-    CodecError,
+    CodecError(mqttrs2::Error),
 
     #[error("Payload of received message is too long")]
     ReceivedMessageTooLong,
@@ -80,7 +57,38 @@ pub enum MqttError {
     SubscribeOrUnsubscribeFailed,
 
     #[error("Some internal error occured")]
-    InternalError
+    InternalError,
+
+    /// The send queue is full. According to the mqtt spec the connection should be closed in this situation
+    #[error("sending packet `{0:?}`: send queue full")]
+    QueueFull(QosPid),
+
+    #[error("received ack for unknown pid `{0:?}`")]
+    UnexpectedAck(Pid),
+
+    #[error("error with pubsub: `{0:?}`")]
+    PubsubError(embassy_sync::pubsub::Error),
+
+    #[error("topic size too big")]
+    TopicSizeError,
+}
+
+impl From<network::NetworkError>  for MqttError {
+    fn from(err: network::NetworkError) -> Self {
+        Self::ConnectionFailed(err)
+    }
+}
+
+impl From<embassy_sync::pubsub::Error>  for MqttError {
+    fn from(err: embassy_sync::pubsub::Error) -> Self {
+        Self::PubsubError(err)
+    }
+}
+
+impl From<mqttrs2::Error> for MqttError {
+    fn from(value: mqttrs2::Error) -> Self {
+        Self::CodecError(value)
+    }
 }
 
 
@@ -113,6 +121,19 @@ pub struct AutoSubscribe {
     pub qos: QoS
 }
 
+impl TryInto<mqttrs2::SubscribeTopic> for &AutoSubscribe {
+    type Error = MqttError;
+
+    fn try_into(self) -> Result<mqttrs2::SubscribeTopic, Self::Error> {
+        let topic = mqttrs2::SubscribeTopic {
+            qos: self.qos,
+            topic_path: String::try_from(self.topic.as_ref())
+                .map_err(|_| MqttError::TopicSizeError)?
+        };
+        Ok(topic)
+    }
+}
+
 impl AutoSubscribe {
     pub fn new(topic: &str, qos: QoS) -> Self {
         let mut this = Self {
@@ -128,7 +149,7 @@ impl AutoSubscribe {
 pub struct ClientConfig {
     pub client_id: String<128>,
     pub credentials: Option<ClientCredentials>,
-    pub auto_subscribes: Vec<AutoSubscribe, MAX_CONCURRENT_REQUESTS>
+    pub auto_subscribes: Vec<AutoSubscribe, 10>
 }
 
 impl ClientConfig {
@@ -172,99 +193,81 @@ pub const MQTT_PAYLOAD_MAX_SIZE: usize = 1024;
 
 pub type Topic = heapless::String<MAX_TOPIC_SIZE>;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct MqttPublish {
-    pub topic: Topic,
-    pub payload: Buffer<[u8; MQTT_PAYLOAD_MAX_SIZE]>,
-    pub qos: QoS,
-    pub retain: bool,
-}
-
-impl MqttPublish {
-
-    pub fn new(topic: &str, payload: &[u8], qos: QoS, retain: bool) -> Self {
-        let mut s = Self {
-            topic: Topic::new(),
-            payload: new_stack_buffer(),
-            qos, retain
-        };
-        s.topic.push_str(topic).unwrap();
-        s.payload.push(payload).unwrap();
-
-        s
-    }
-
-}
-
-impl <'a> TryFrom<&Publish<'a>> for MqttPublish {
-    type Error = MqttError;
-
-    fn try_from(value: &Publish<'a>) -> Result<Self, Self::Error> {
-        let mut topic = Topic::new();
-        if let Err(_) = topic.push_str(value.topic_name) {
-            warn!("Topic of received message is longer than {}: {}", MAX_TOPIC_SIZE, value.topic_name.len());
-            return Err(MqttError::ReceivedMessageTooLong);
-        }
-
-        let mut payload = new_stack_buffer();
-        if let Err(_e) = payload.push(&value.payload) {
-            warn!("Payload of received message is longer than {}: {}", MQTT_PAYLOAD_MAX_SIZE, value.payload.len());
-        }
-
-        let qos = value.qospid.qos();
-
-        Ok(Self {
-            topic, payload, qos,
-            retain: value.retain
-        })
-    }
-}
-
-impl  MqttPublish {
-    pub(crate) fn create_publish<'a>(&'a self, pid: Pid, dup: bool) -> Publish<'a> {
-        let qospid = match self.qos {
-            QoS::AtMostOnce => QosPid::AtMostOnce,
-            QoS::AtLeastOnce => QosPid::AtLeastOnce(pid),
-            QoS::ExactlyOnce => QosPid::ExactlyOnce(pid),
-        };
-
-        Publish {
-            dup,
-            qospid,
-            retain: self.retain,
-            topic_name: &self.topic,
-            payload: self.payload.data()
-        }
-    }
-}
-
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum MqttEvent {
+pub(crate) enum MqttEvent {
 
-    Connected,
-    InitialSubscribesDone,
-
-    PublishResult(UniqueID, Result<(), MqttError>),
-    SubscribeResult(UniqueID, Result<QoS, MqttError>),
-    UnsubscribeResult(UniqueID, Result<(), MqttError>)
+    PublishDone(UniqueID),
+    SubscribeDone(UniqueID, Result<QoS, MqttError>),
+    UnsubscribeDone(UniqueID)
 }
 
+struct UniqueIDPool {
+    next_unused: u32,
+    pool: Deque<u32, 16>
+}
+
+impl UniqueIDPool {
+
+    const fn new() -> Self {
+        Self {
+            next_unused: 0,
+            pool: Deque::new()
+        }
+    }
+
+    fn next(&mut self) -> UniqueID {
+        if let Some(id) = self.pool.pop_front() {
+            UniqueID(id)
+        } else {
+            self.take()
+        }
+    }
+
+    fn take(&mut self) -> UniqueID {
+        let id = self.next_unused;
+        if self.next_unused == u32::MAX {
+            panic!("used up all unique ids");
+        } else {
+            self.next_unused += 1;
+        }
 
 
-#[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum MqttRequest {
+        UniqueID(id)
+    }
 
-    Publish(MqttPublish, UniqueID),
+    fn free(&mut self, id: UniqueID) {
+        self.pool.push_back(id.0)
+            .inspect_err(|err| {
+                error!("UniqueId pool full, dropping {} forever", err);
+            })
+        .unwrap()
+    }
 
-    Subscribe(Topic, UniqueID),
+}
 
-    Unsubscribe(Topic, UniqueID),
+static UNIQUE_ID_POOL: Mutex<CriticalSectionRawMutex, RefCell<UniqueIDPool>> = Mutex::new(RefCell::new(UniqueIDPool::new()));
 
-    Disconnect,
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct UniqueID(u32);
+
+#[cfg(test)]
+impl From<u32> for UniqueID {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl UniqueID {
+
+    pub(crate) fn new() -> Self {
+        UNIQUE_ID_POOL.lock(|inner| inner.borrow_mut().next())
+    }
+
+    pub(crate) fn free(self) {
+        UNIQUE_ID_POOL.lock(|inner| inner.borrow_mut().free(self))
+    }
 
 }
 
