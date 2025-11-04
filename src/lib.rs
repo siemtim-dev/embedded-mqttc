@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::cell::RefCell;
+use core::{cell::RefCell, net::IpAddr};
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use heapless::{Deque, String};
@@ -23,8 +23,6 @@ pub(crate) mod buffer;
 
 pub mod packet;
 
-pub mod network;
-
 pub(crate) mod mutex;
 
 #[cfg(test)]
@@ -35,8 +33,11 @@ pub mod testutils;
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttError {
 
-    #[error("TCP Connection failed")]
-    ConnectionFailed(network::NetworkError),
+    #[error("TCP conenction failed")]
+    ConnectionFailed2(embedded_io_async::ErrorKind),
+
+    #[error("DNS failed")]
+    DnsFailed,
 
     #[error("buffer too small")]
     BufferTooSmall,
@@ -72,10 +73,16 @@ pub enum MqttError {
     #[error("topic size too big")]
     TopicSizeError,
 }
+impl MqttError {
+    pub(crate) fn new_dns(err: &dyn core::fmt::Debug) -> Self {
+        error!("dns failed: {:?}", err);
+        Self::DnsFailed
+    }
+}
 
-impl From<network::NetworkError>  for MqttError {
-    fn from(err: network::NetworkError) -> Self {
-        Self::ConnectionFailed(err)
+impl From<embedded_io_async::ErrorKind> for MqttError {
+    fn from(err_kind: embedded_io_async::ErrorKind) -> Self {
+        Self::ConnectionFailed2(err_kind)
     }
 }
 
@@ -94,21 +101,16 @@ impl From<mqttrs2::Error> for MqttError {
 
 /// Credentials used to connecto to the broker
 #[derive(Clone)]
-pub struct ClientCredentials {
-    pub username: String<32>,
-    pub password: String<128>,
+pub struct ClientCredentials<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
 }
 
-impl ClientCredentials {
-    pub fn new(username: &str, password: &str) -> Self {
-        let mut this = Self {
-            username: String::new(),
-            password: String::new()
-        };
-
-        this.username.push_str(username).unwrap();
-        this.password.push_str(password).unwrap();
-        this
+impl <'a> ClientCredentials<'a> {
+    pub fn new(username: &'a str, password: &'a str) -> Self {
+        Self {
+            username, password
+        }
     }
 }
 
@@ -146,29 +148,37 @@ impl AutoSubscribe {
 }
 
 #[derive(Clone)]
-pub struct ClientConfig {
-    pub client_id: String<128>,
-    pub credentials: Option<ClientCredentials>,
+pub enum Host<'a> {
+    Hostname(&'a str),
+    Ip(IpAddr)
+}
+
+#[derive(Clone)]
+pub struct ClientConfig<'a> {
+    pub host: Host<'a>,
+    pub port: Option<u16>,
+    pub client_id: &'a str,
+    pub credentials: Option<ClientCredentials<'a>>,
     pub auto_subscribes: Vec<AutoSubscribe, 10>
 }
 
-impl ClientConfig {
-    pub fn new(client_id: &str, credentials: Option<ClientCredentials>) -> Self {
-        let mut cid = String::new();
-        cid.push_str(client_id).unwrap();
+impl <'a> ClientConfig<'a> {
+    pub fn new(host: Host<'a>, port: Option<u16>, client_id: &'a str, credentials: Option<ClientCredentials<'a>>) -> Self {
         Self {
-            client_id: cid,
+            host,
+            port,
+            client_id,
             credentials,
             auto_subscribes: Vec::new()
         }
     }
 
-    pub fn new_with_auto_subscribes<'a>(client_id: &str, credentials: Option<ClientCredentials>, auto_subscribes: impl Iterator<Item = &'a str>, qos: QoS) -> Self {
-        let mut cid = String::new();
-        cid.push_str(client_id).unwrap();
+    pub fn new_with_auto_subscribes<'b>(host: Host<'a>, port: Option<u16>, client_id: &'a str, credentials: Option<ClientCredentials<'a>>, auto_subscribes: impl Iterator<Item = &'b str>, qos: QoS) -> Self {
 
         let mut this = Self {
-            client_id: cid,
+            host,
+            port,
+            client_id,
             credentials,
             auto_subscribes: Vec::new()
         };

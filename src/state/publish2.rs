@@ -216,6 +216,7 @@ impl <const PARALLEL_PUBLISHES: usize, const BUFFER: usize, const TOPIC_SIZE: us
     }
 
     async fn send_pending_publishes(&mut self, connection: &impl ConnectionState, publisher: DynPublisher<'_, MqttEvent>) -> Result<SendResult, MqttError> {
+        info!("send pending publishes, {} pending", self.send_publish.len());
         let mut i = 0;
         
         while i < self.send_publish.len() {
@@ -260,6 +261,8 @@ impl <const PARALLEL_PUBLISHES: usize, const BUFFER: usize, const TOPIC_SIZE: us
     }
 
     fn send_pending_pubrel(&mut self, connection: &impl ConnectionState) -> Result<SendResult, MqttError> {
+        info!("send pending pubrel, {} pending", self.send_pubrel.len());
+
         let mut i = 0;
         while i < self.send_pubrel.len() {
             let current = &self.send_pubrel[i];
@@ -322,6 +325,7 @@ impl <const PARALLEL_PUBLISHES: usize, const BUFFER: usize, const TOPIC_SIZE: us
 
 
     pub async fn send_packets(&mut self, connection: &impl ConnectionState, publisher: DynPublisher<'_, MqttEvent>) -> Result<SendResult, MqttError> {        
+        info!("publishes: send_packets");
         self.send_pending_pubrel(connection)?
             .next(|| self.send_pending_publishes(connection, publisher)).await?
             .next_sync(|| self.resend_publishes(connection))

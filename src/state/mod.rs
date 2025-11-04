@@ -3,21 +3,22 @@ use core::ops::Add;
 
 use embassy_futures::select::select3;
 use embassy_sync::pubsub::{DynSubscriber, PubSubChannel};
+use embedded_nal_async::{Dns, TcpConnect};
 
 use crate::client::MqttClient;
-use crate::network::PlattformNetwork;
 use crate::state::connection::{ConnectionState, TcpConnectionState};
 use crate::state::pid::next_pid;
 use crate::state::publish2::Publishes;
 use crate::state::receives2::{ReceivedPublish, Receives};
 use crate::state::request::{RequestNotification, RequestState};
 use crate::state::sub2::Subs;
+use crate::time::Duration;
 
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use mqttrs2::{LastWill, Packet, Publish, QoS, QosPid};
 use ping::PingState;
 
-use crate::{ClientConfig, MqttError, MqttEvent, UniqueID};
+use crate::{ClientConfig, MqttError, MqttEvent, UniqueID, time};
 
 pub(crate) const KEEP_ALIVE: usize = 60;
 
@@ -34,6 +35,8 @@ pub(crate) mod sub2;
 pub(crate) mod pid;
 
 pub(crate) mod request;
+
+const RECONNECT_DURATION: Duration = Duration::from_secs(5);
 
 /// Result returnes from methods that send packets to the network
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,9 +82,10 @@ impl Add<Self> for SendResult {
     }
 }
 
-pub struct State<'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> {
+pub struct State<'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> 
+where NET: TcpConnect, DNS: Dns {
 
-    pub(crate) connection_state: TcpConnectionState<'l, M, NET, BUFFER>, 
+    pub(crate) connection_state: TcpConnectionState<'n, 'l, M, NET, DNS, BUFFER>, 
 
     ping: PingState<M>,
 
@@ -96,11 +100,12 @@ pub struct State<'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, co
 
 }
 
-impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> State<'l, M, NET, BUFFER, TOPIC, QUEUE> {
+impl <'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> 
+where NET: TcpConnect, DNS: Dns{
 
-    pub fn new(config: ClientConfig, last_will: Option<LastWill<'l>>, network: &'l NET) -> Self {
+    pub fn new(config: ClientConfig<'l>, last_will: Option<LastWill<'l>>, network: &'n NET, dns: DNS) -> Self {
         Self {
-            connection_state: TcpConnectionState::new(network, last_will, config),
+            connection_state: TcpConnectionState::new(network, dns, last_will, config),
 
             ping: PingState::new(),
 
@@ -113,18 +118,19 @@ impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: 
         }
     }
 
-    pub fn new_client(&self) -> MqttClient<'_, 'l, M, NET, BUFFER, TOPIC, QUEUE> {
+    pub fn new_client(&self) -> MqttClient<'_, 'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> {
         MqttClient::new(self)
     }
 
     pub(crate) async fn publish(&self, topic: &str, payload: &[u8], qos: QoS, retain: bool, unique_id: UniqueID) -> Result<(), MqttError> {
-        self.connection_state.await_connected().await;
 
         let qospid = match qos {
             QoS::AtMostOnce => QosPid::AtMostOnce,
             QoS::AtLeastOnce => QosPid::AtLeastOnce(next_pid()),
             QoS::ExactlyOnce => QosPid::ExactlyOnce(next_pid()),
         };
+
+        debug!("state: adding publish request with qos {}", &qospid);
 
         let publish = Publish {
             topic_name: topic,
@@ -157,12 +163,13 @@ impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: 
     /// Returns true until the client disconnects
     async fn run_once(&self) -> Result<bool, MqttError> {
         if self.connection_state.get_state() != Some(connection::ConnectionStateValue::Connected) {
+            info!("not connected yed: starting connection");
             self.connection_state.connect().await?;
         }
 
-        let request_added_future = self.on_requst_added.next_notification();
-
         let publisher = self.events.dyn_publisher().unwrap();
+
+        debug!("event loop: start sending packets");
 
         let send_packet_result = self.publishes.send_packets(&self.connection_state, publisher).await?
             .next(|| self.received_publishes.send_packets(&self.connection_state)).await?
@@ -170,6 +177,7 @@ impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: 
             .next_sync(|| self.ping.send(&self.connection_state))?;
 
         if send_packet_result == SendResult::PartiallySent {
+            debug!("partially sent packets, run io nonblocking");
             if let Some(packet) = self.connection_state.run_io_nonblocking().await? {
                 self.process_packet(&packet).await?;
             }
@@ -177,20 +185,28 @@ impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: 
             return Ok(true);
         }
 
+        debug!("sent all packets, run io blocking");
+
         // TODO make ping and resend future
         let ping_future = self.ping.ping_pause();
         let io_future = self.connection_state.run_io();
+        let request_added_future = self.on_requst_added.next_notification();
 
         match select3(request_added_future, ping_future, io_future).await {
             embassy_futures::select::Either3::First(request) if request == RequestNotification::Disconnect => {
+                debug!("run_once: disconnect request received");
                 Ok(false)
             },
             embassy_futures::select::Either3::Third(packet) => {
+                debug!("run_once: received packet");
                 let packet = packet?;
                 self.process_packet(&packet).await?;
                 Ok(true)
             },
-            _ => Ok(true),
+            _ => {
+                debug!("run_once: stop io, new event arrived");
+                Ok(true)
+            },
         }
     }
 
@@ -201,22 +217,27 @@ impl <'l, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: 
                 Ok(false) => {
                     // Disconnect
                     self.connection_state.disconnect().await?;
+                    info!("disconnect: exit run loop");
                     return Ok(())
                 },
-                Err(err) => match err {
+                Err(err) => {
+                    error!("connection error: {}", &err);
+                    match err {
+                        MqttError::ConnectionFailed2(_) |
+                        MqttError::ConnackError |
+                        MqttError::CodecError(_) |
+                        MqttError::ReceivedMessageTooLong |
+                        MqttError::QueueFull(_) |
+                        MqttError::UnexpectedAck(_)  => {
+                            self.connection_state.set_error();
+                            time::sleep(RECONNECT_DURATION).await;
+                        },
 
-                    // on connection related errors reconnect
-                    MqttError::ConnectionFailed(_) |
-                    MqttError::ConnackError |
-                    MqttError::CodecError(_) |
-                    MqttError::ReceivedMessageTooLong |
-                    MqttError::QueueFull(_) |
-                    MqttError::UnexpectedAck(_)  => {
-                        self.connection_state.set_error();
-                        error!("network related error, reconnecting");
-                    },
-
-                    err => return Err(err),
+                        err => {
+                            error!("not recoverable error: stop loop");
+                            return Err(err)
+                        },
+                    }
                 },
             }
         }

@@ -1,16 +1,21 @@
 
 
-use std::{env::{self, VarError}, fmt::Debug, pin::Pin, str::{from_utf8, FromStr}};
+use std::{env::{self, VarError}, fmt::Debug, str::{FromStr, from_utf8}};
 use embassy_futures::select::select;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
-use embedded_mqttc::{ClientConfig, ClientCredentials, network::std::StdNetwork, state::State};
+use embedded_mqttc::{ClientConfig, ClientCredentials, Host, state::State};
 use mqttrs2::{LastWill, QoS};
 
+
 use test_log::test;
+use uuid::Uuid;
 
 mod broker_common;
 use broker_common::{create_sinple_client, random_topic};
-use uuid::Uuid;
+
+use crate::test_network::TestNetwork;
+
+mod test_network;
 
 const MQTT_DEFAULT_PORT: u16 = 1883;
 
@@ -45,12 +50,15 @@ impl BrokerConfig {
         env.map(|env_str| env_str.parse().expect("failed to parse env value"))
     }
 
-    fn network(&self) -> StdNetwork<'_> {
-        let port = self.port.unwrap_or(MQTT_DEFAULT_PORT);
-        StdNetwork::new(&self.host, port)
+    fn parse_host<'a>(host: &'a str) -> Host<'a> {
+        if let Ok(ip) = host.parse() {
+            return Host::Ip(ip)
+        }
+
+        Host::Hostname(host)
     }
 
-    fn new_client_config(&self, client_id: &str) -> ClientConfig {
+    fn new_client_config<'a>(&'a self, client_id: &'a str) -> ClientConfig<'a> {
         let credentials = match &self.username {
             Some(username) => {
                 let password = self.password.as_ref().unwrap();
@@ -59,10 +67,11 @@ impl BrokerConfig {
             None => None,
         };
 
-        ClientConfig::new(client_id, credentials)
+        let host = Self::parse_host(&self.host);
+        ClientConfig::new(host, self.port, client_id, credentials)
     }
 
-    fn new_client_config_with_auto_subscribe<'a>(&self, client_id: &str, auto_subscribes: impl Iterator<Item = &'a str>, qos: QoS) -> ClientConfig {
+    fn new_client_config_with_auto_subscribe<'a, 'b>(&'b self, client_id: &'b str, auto_subscribes: impl Iterator<Item = &'a str>, qos: QoS) -> ClientConfig<'b> {
         let credentials = match &self.username {
             Some(username) => {
                 let password = self.password.as_ref().unwrap();
@@ -71,7 +80,8 @@ impl BrokerConfig {
             None => None,
         };
 
-        ClientConfig::new_with_auto_subscribes(client_id, credentials, auto_subscribes, qos)
+        let host = Host::Hostname(&self.host);
+        ClientConfig::new_with_auto_subscribes(host, self.port, client_id, credentials, auto_subscribes, qos)
     }
 
     fn unwrap_port(&self) -> u16 {
@@ -89,8 +99,9 @@ async fn test_broker_publish_qos0() {
     
     let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config(&client_id);
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
 
@@ -104,8 +115,9 @@ async fn test_broker_publish_qos0() {
     };
 
     tokio::select! {
-        _ = client_loop_future => {
-            panic!("client loop must not stop");
+        result = client_loop_future => {
+            let err = result.unwrap_err();
+            panic!("client loop must not stop: {}", err);
         },
         _ = test_future => {}
     }
@@ -121,8 +133,9 @@ async fn test_broker_publish_qos1() {
     
     let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config(&client_id);
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
 
@@ -153,8 +166,9 @@ async fn test_broker_publish_qos2() {
     
     let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config(&client_id);
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
 
@@ -241,8 +255,9 @@ async fn test_broker_subscribe() {
 
     let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config(&client_id);
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
 
@@ -286,8 +301,9 @@ async fn test_broker_publish() {
     
     let client_id = Uuid::new_v4().to_string();
     let mqtt_config = broker_config.new_client_config(&client_id);
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
 
@@ -304,7 +320,9 @@ async fn test_broker_publish() {
         tokio::time::sleep(core::time::Duration::from_millis(500)).await;
         client.publish(&topic, payload, QoS::AtLeastOnce, false).await.unwrap();
         client.disconnect();
-        tracing::trace!("TEST: publish_future done");
+        
+        #[cfg(feature = "tracing")]
+        tracing::debug!("TEST: publish_future done");
     };
 
     let (client, mut receiver, cancel_token) = create_sinple_client(&broker_config);
@@ -315,6 +333,8 @@ async fn test_broker_publish() {
         let payload_str = std::str::from_utf8(&publish.payload).unwrap();
         assert_eq!(payload_str, "test-payload-hjh3");
         client.disconnect().await.unwrap();
+        
+        #[cfg(feature = "tracing")]
         tracing::trace!("TEST: subscribe_future done");
     };
 
@@ -349,8 +369,9 @@ async fn test_auto_subscribe() {
         auto_subscribe_topics.iter().map(|s| &s[..]),
         QoS::AtLeastOnce
     );
-    let network = broker_config.network();
-    let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, None, &network);
+    let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, None, &network, dns);
 
     let client = mqtt_state.new_client();
     let mut client_receives = client.subscribe_received_publishes().unwrap();
@@ -414,8 +435,9 @@ async fn test_last_will() {
     };
 
     let client_future = async {
-        let network = broker_config.network();
-        let mqtt_state = State::<'_, CriticalSectionRawMutex, _, 1024, 128, 8>::new(mqtt_config, Some(last_will), &network);
+        let network = TestNetwork;
+    let dns = network.clone();
+    let mqtt_state = State::<'_, '_, CriticalSectionRawMutex, _, _, 1024, 128, 8>::new(mqtt_config, Some(last_will), &network, dns);
         let client = mqtt_state.new_client();
         
         tokio::time::sleep(core::time::Duration::from_millis(1000)).await;

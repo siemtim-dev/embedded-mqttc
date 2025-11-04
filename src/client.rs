@@ -1,19 +1,22 @@
 
 
 use embassy_sync::{blocking_mutex::raw::RawMutex, pubsub::DynSubscriber};
+use embedded_nal_async::{Dns, TcpConnect};
 use mqttrs2::QoS;
 
-use crate::{MqttError, MqttEvent, UniqueID, network::PlattformNetwork, state::{State, connection::ConnectionState, receives2::ReceivedPublish}};
+use crate::{MqttError, MqttEvent, UniqueID, state::{State, connection::ConnectionState, receives2::ReceivedPublish}};
 
 /// The MQTT Client to publish messages, subscribe, unsubscribe and receive messages
 #[derive(Clone)]
-pub struct MqttClient<'a, 'b, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> {
-    state: &'a State<'b, M, NET, BUFFER, TOPIC, QUEUE>
+pub struct MqttClient<'a, 'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> 
+where NET: TcpConnect, DNS: Dns {
+    state: &'a State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE>
 }
 
-impl <'a, 'b, M: RawMutex, NET: PlattformNetwork, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> MqttClient<'a, 'b, M, NET, BUFFER, TOPIC, QUEUE> {
+impl <'a, 'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> MqttClient<'a, 'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> 
+where NET: TcpConnect, DNS: Dns {
 
-    pub(crate) fn new(state: &'a State<'b, M, NET, BUFFER, TOPIC, QUEUE>) -> Self {
+    pub(crate) fn new(state: &'a State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE>) -> Self {
         Self {
             state
         }

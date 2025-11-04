@@ -43,6 +43,8 @@ impl RequestStateInner {
             Some(RequestNotification::Disconnect) => Some(RequestNotification::Disconnect), // Never overwrite a disconnect
             _ => Some(notification),
         };
+
+        self.waker.wake();
     }
 
 }

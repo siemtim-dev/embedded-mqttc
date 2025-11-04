@@ -79,6 +79,8 @@ impl PingStateInner {
             },
         };
 
+        info!("next ping in {} s", duration.as_secs());
+
         time::sleep(duration)
     }
 

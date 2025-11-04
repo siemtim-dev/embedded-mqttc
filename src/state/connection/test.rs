@@ -1,6 +1,9 @@
-use core::{mem, ops::Deref};
-use std::sync::{Arc, Mutex};
+use core::{future::Future, mem, net::IpAddr, ops::Deref, task::Poll};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
+use embassy_sync::waitqueue::WakerRegistration;
+use embedded_io_async::{ErrorType, Read, Write};
+use embedded_nal_async::{AddrType, Dns, TcpConnect};
 use mqttrs2::{Packet, decode_slice, encode_slice};
 
 use crate::state::connection::{ConnectionState, ConnectionStateValue};
@@ -145,3 +148,156 @@ impl Clone for DummyConnectionState {
     }
 }
 
+pub struct TestTcpConnection<'a> {
+    bytes_sent: &'a Mutex<Vec<u8>>,
+    bytes_received: &'a Mutex<Vec<u8>>,
+    read_wakers: &'a Mutex<WakerRegistration>,
+}
+
+pub struct TestConnectionReadFuture<'a, 'b> {
+    bytes_received: &'a Mutex<Vec<u8>>,
+    read_wakers: &'a Mutex<WakerRegistration>,
+    buf: &'b mut [u8]
+}
+
+impl<'a, 'b> Future for TestConnectionReadFuture<'a, 'b> {
+    type Output = Result<usize, embedded_io_async::ErrorKind>;
+
+    fn poll(mut self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
+        let mut bytes_received = self.bytes_received.lock().unwrap();
+        let mut read_wakers = self.read_wakers.lock().unwrap();
+
+        if bytes_received.is_empty() {
+            read_wakers.register(cx.waker());
+            Poll::Pending
+        } else if bytes_received.len() > self.buf.len() {
+            let buf = &mut self.buf;
+            buf.copy_from_slice(&bytes_received[..buf.len()]);
+            bytes_received.drain(..self.buf.len());
+            Poll::Ready(Ok(self.buf.len()))
+        } else {
+            let bytes_read = bytes_received.len();
+            self.buf[..bytes_read].copy_from_slice(&bytes_received);
+            bytes_received.clear();
+            Poll::Ready(Ok(bytes_read))
+        }
+    }
+}
+
+impl<'a> Read for TestTcpConnection<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Self::Error>> {
+        TestConnectionReadFuture{
+            bytes_received: self.bytes_received,
+            read_wakers: self.read_wakers,
+            buf
+        }
+    }
+}
+
+impl<'a> ErrorType for TestTcpConnection<'a> {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+impl<'a> Write for TestTcpConnection<'a> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        let mut bytes_sent = self.bytes_sent.lock().unwrap();
+        bytes_sent.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+pub struct TestTcpConnect {
+    pub bytes_sent: Mutex<Vec<u8>>,
+    bytes_received: Mutex<Vec<u8>>,
+    read_wakers: Mutex<WakerRegistration>,
+}
+
+impl TestTcpConnect {
+
+    pub fn new() -> Self {
+        Self {
+            bytes_received: Mutex::new(Vec::new()),
+            bytes_sent: Mutex::new(Vec::new()),
+            read_wakers: Mutex::new(WakerRegistration::new())
+        }
+    }
+
+    pub fn add_bytes_to_receive(&self, buf: &[u8]) {
+        let mut bytes_received = self.bytes_received.lock().unwrap();
+        let mut read_wakers = self.read_wakers.lock().unwrap();
+        bytes_received.extend_from_slice(buf);
+        read_wakers.wake();
+    }
+
+}
+
+impl TcpConnect for TestTcpConnect {
+    type Error = embedded_io_async::ErrorKind;
+
+    type Connection<'a> = TestTcpConnection<'a>;
+
+    async fn connect<'a>(&'a self, _remote: core::net::SocketAddr) -> Result<Self::Connection<'a>, Self::Error> {
+        Ok(TestTcpConnection { 
+            bytes_sent: &self.bytes_sent, 
+            bytes_received: &self.bytes_received,
+            read_wakers: &self.read_wakers
+        })
+    }
+}
+
+
+
+pub struct TestDns {
+    hosts: HashMap<String, IpAddr>
+}
+
+impl Dns for TestDns {
+    type Error = &'static str;
+
+    async fn get_host_by_name(
+            &self,
+            host: &str,
+            addr_type: AddrType,
+        ) -> Result<IpAddr, Self::Error> {
+        if let Some(ip) = self.hosts.get(host){
+            match (ip, addr_type) {
+                (ip, AddrType::Either) => Ok(ip.clone()),
+                (IpAddr::V4(v4), AddrType::IPv4) => Ok(IpAddr::V4(v4.clone())),
+                (IpAddr::V6(v6), AddrType::IPv6) => Ok(IpAddr::V6(v6.clone())),
+                _ => Err("host not found")
+            }
+        } else {
+            Err("host not found")
+        }
+    }
+
+    async fn get_host_by_address(
+            &self,
+            _addr: IpAddr,
+            _result: &mut [u8],
+        ) -> Result<usize, Self::Error> {
+        unimplemented!()
+    }
+}
+
+impl TestDns {
+    pub fn new(hosts: HashMap<String, IpAddr>) -> Self {
+        Self {
+            hosts
+        }
+    }
+
+    pub fn new_single(name: impl Into<String>, ip: IpAddr) -> Self {
+        Self {
+            hosts: {
+                let mut map = HashMap::new();
+                map.insert(name.into(), ip);
+                map
+            }
+        }
+    }
+}

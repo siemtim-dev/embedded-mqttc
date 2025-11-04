@@ -18,17 +18,16 @@ embassy-sync = { version = "0.6.2", default-features = false }
 embassy-futures = { version = "^0.1.1", default-features = false }
 defmt = { version = "0.3.10" , optional = true }
 tokio = { version = "1.43.0" , optional = true, features = ["macros", "net", "tokio-macros", "io-util", "time", "rt-multi-thread"] }
-embedded-io-async = { version = "0.6.1" }
 tracing = { version = "0.1.41", optional = true }
 embassy-time = { version = ">= 0.3.0, < 0.5.0", default-features = false, optional = true }
-
-embassy-net = { version = ">= 0.5.0, < 0.7.0", optional = true, features = ["dns", "tcp", "proto-ipv4", "proto-ipv6", "medium-ip"] }
+embedded-nal-async = ">= 0.6.0, <= 0.9.0"
+embedded-io-async = ">= 0.6.0, <= 0.7.0"
 
 [features]
 default = [ "std", "embassy" ]
-embassy = [ "dep:embassy-time", "dep:embassy-net" ]
+embassy = [ "dep:embassy-time" ]
 std = [ "embassy-sync/std", "dep:tokio" ]
-defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt", "embassy-net/defmt", "mqttrs2/defmt", "embassy-futures/defmt", "embedded-io-async/defmt-03" ]
+defmt = ["dep:defmt", "embassy-sync/defmt", "embassy-time/defmt",  "mqttrs2/defmt", "embassy-futures/defmt" ]
 tracing = [ "std", "dep:tracing" ]
 test_with_broker = [ "std" ]
 
@@ -46,5 +45,6 @@ rumqttc = "0.24.0"
 tokio-util = "0.7.13"
 dotenvy = "0.15.7"
 uuid = { version = "1.15.1", features = ["v4"] }
+dns-lookup = "3.0.1"
 
 
