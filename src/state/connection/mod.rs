@@ -2,7 +2,7 @@ use core::{cell::RefCell, future::Future, net::SocketAddr, ops::Deref};
 
 use embassy_futures::poll_once;
 use embassy_sync::{blocking_mutex::raw::RawMutex, watch::Watch};
-use embedded_nal_async::{AddrType, Dns, TcpConnect};
+use embedded_nal_async::{Dns, TcpConnect};
 use embedded_io_async::{Read, Write, Error};
 use mqttrs2::{Connack, Connect, LastWill, Packet, Protocol, Suback, Subscribe, decode_slice_with_len, encode_slice};
 
@@ -423,17 +423,14 @@ where NETWORK: TcpConnect, DNS: Dns {
 
         {       
             let port = self.config.port.unwrap_or(MQTT_DEFAULT_PORT);
-            let addr = match self.config.host {
-                crate::Host::Hostname(host) => {
-                    let ip = self.dns.get_host_by_name(host, AddrType::Either).await
-                        .map_err(|err| MqttError::new_dns(&err))?;
-                    SocketAddr::new(ip, port)
-                },
-                crate::Host::Ip(ip) => SocketAddr::new(ip, port),
-            };
+            debug!("connect using port {}", port);
+            let ip = self.config.host.resolve(&self.dns).await?;
+            let addr = SocketAddr::new(ip, port);
 
+            trace!("start connecting to socket addr {}", &addr);
             let connection = self.network.connect(addr).await
                 .map_err(|err| MqttError::ConnectionFailed2(err.kind()))?;
+            trace!("successfully established tcp connection to broker");
 
 
             let mut connection_lock = self.connection.borrow_mut();
@@ -543,196 +540,211 @@ where NETWORK: TcpConnect, DNS: Dns {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use core::pin::{Pin, pin};
+#[cfg(test)]
+mod tests {
+    use core::{net::{IpAddr, Ipv4Addr}, pin::{Pin, pin}};
 
-//     use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
-//     use heapless::Vec;
-//     use mqttrs2::{Connack, ConnectReturnCode, Packet, PacketType};
+    use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
+    use heapless::Vec;
+    use mqttrs2::{Connack, ConnectReturnCode, Packet, PacketType};
 
-//     use crate::{ClientConfig, network::test::TestNetwork, state::connection::{ConnectionState, ConnectionStateValue, TcpConnectionState}};
-//     use crate::testutils::*;
+    use crate::{ClientConfig, Host, state::connection::{ConnectionState, ConnectionStateValue, TcpConnectionState, test::{TestDns, TestTcpConnect}}};
+    use crate::testutils::*;
 
-//     #[test]
-//     fn test_connect() {
-//         let dummy_network = TestNetwork::new();
+    #[test]
+    fn test_connect() {
+        let tcp = TestTcpConnect::new(); 
+        let dns = TestDns::new_single("my-mqtt-test-broker", IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
 
-//         let client_config = ClientConfig { 
-//             client_id: heapless::String::try_from("clien-12345").unwrap(), 
-//             credentials: None, 
-//             auto_subscribes: Vec::new(),
-//         };
+        let client_config = ClientConfig {
+            host: Host::Hostname("my-mqtt-test-broker"),
+            port: None,
+            client_id: "clien-12345", 
+            credentials: None, 
+            auto_subscribes: Vec::new(),
+        };
 
-//         let connection_state: TcpConnectionState<'_, CriticalSectionRawMutex, _, 1024> = TcpConnectionState::new(&dummy_network, None, client_config.clone());
-//         let mut connection_state_receiver = connection_state.inner.dyn_receiver().unwrap();
+        let connection_state: TcpConnectionState<'_, '_, CriticalSectionRawMutex, _, _, 1024> = TcpConnectionState::new(&tcp, dns, None, client_config.clone());
+        let mut connection_state_receiver = connection_state.inner.dyn_receiver().unwrap();
 
-//         let mut connect_future = connection_state.connect();
-//         let mut connect_future = unsafe {
-//             Pin::new_unchecked(&mut connect_future)
-//         };
+        let mut connect_future = connection_state.connect();
+        let mut connect_future = unsafe {
+            Pin::new_unchecked(&mut connect_future)
+        };
 
-//         // Send connect packet to network, now waiting for connack
-//         assert_pending(connect_future.as_mut());
-//         assert_eq!(connection_state_receiver.try_changed(), Some(ConnectionStateValue::ConnectSent));
+        // Send connect packet to network, now waiting for connack
+        assert_pending(connect_future.as_mut());
+        assert_eq!(connection_state_receiver.try_changed(), Some(ConnectionStateValue::ConnectSent));
 
-//         // test if the connect packet was written
-//         dummy_network.assert_packet_written(|packet| match packet {
-//             Packet::Connect(connect) => {
-//                 assert_eq!(connect.client_id, client_config.client_id);
-//                 // TODO add more asserts
-//             },
-//             p => panic!("unexpected packet: {:?}", p)
-//         });
+        // test if the connect packet was written
+        tcp.assert_packet_written(|packet| match packet {
+            Packet::Connect(connect) => {
+                assert_eq!(connect.client_id, client_config.client_id);
+                // TODO add more asserts
+            },
+            p => panic!("unexpected packet: {:?}", p)
+        });
 
-//         // "receive" a conack
-//         let connack = Connack{
-//             session_present: false,
-//             code: ConnectReturnCode::Accepted
-//         };
+        // "receive" a conack
+        let connack = Connack{
+            session_present: false,
+            code: ConnectReturnCode::Accepted
+        };
 
-//         dummy_network.add_packet_to_receive(&Packet::Connack(connack));
+        tcp.add_packet_to_receive(&Packet::Connack(connack));
 
-//         // process connack
-//         // Ready because there are no autosubscribes
-//         assert_ready(connect_future.as_mut()).unwrap();
-//         assert_eq!(connection_state_receiver.try_changed(), Some(ConnectionStateValue::Connected));
-//     }
+        // process connack
+        // Ready because there are no autosubscribes
+        assert_ready(connect_future.as_mut()).unwrap();
+        assert_eq!(connection_state_receiver.try_changed(), Some(ConnectionStateValue::Connected));
+    }
 
-//     fn connect<M: RawMutex, const BUFFER: usize>(state: &TcpConnectionState<'_, M, TestNetwork, BUFFER>, network: &TestNetwork) {
-//         let connect_future = state.connect();
-//         let mut connect_future = pin!(connect_future);
+    fn connect<M: RawMutex, const BUFFER: usize>(state: &TcpConnectionState<'_, '_, M, TestTcpConnect, TestDns, BUFFER>, tcp: &TestTcpConnect) {
+        let connect_future = state.connect();
+        let mut connect_future = pin!(connect_future);
 
-//         // Send connect packet to network, now waiting for connack
-//         assert_pending(connect_future.as_mut());
+        // Send connect packet to network, now waiting for connack
+        assert_pending(connect_future.as_mut());
 
-//         network.assert_packet_written(|p| {
-//             assert_eq!(p.get_type(), PacketType::Connect);
-//         });
+        tcp.assert_packet_written(|p| {
+            assert_eq!(p.get_type(), PacketType::Connect);
+        });
 
-//         // "receive" a conack
-//         let connack = Connack{
-//             session_present: false,
-//             code: ConnectReturnCode::Accepted
-//         };
+        // "receive" a conack
+        let connack = Connack{
+            session_present: false,
+            code: ConnectReturnCode::Accepted
+        };
 
-//         network.add_packet_to_receive(&Packet::Connack(connack));
+        tcp.add_packet_to_receive(&Packet::Connack(connack));
 
-//         assert_ready(connect_future.as_mut()).unwrap();
-//     }
+        assert_ready(connect_future.as_mut()).unwrap();
+    }
 
-//     #[test]
-//     fn test_run_io_read() {
-//         let dummy_network = TestNetwork::new();
+    #[test]
+    fn test_run_io_read() {
+        let tcp = TestTcpConnect::new(); 
+        let dns = TestDns::new_single("my-mqtt-test-broker", IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
 
-//         let client_config = ClientConfig { 
-//             client_id: heapless::String::try_from("clien-12345").unwrap(), 
-//             credentials: None, 
-//             auto_subscribes: Vec::new(),
-//         };
+        let client_config = ClientConfig {
+            host: Host::Hostname("my-mqtt-test-broker"),
+            port: None,
+            client_id: "clien-12345", 
+            credentials: None, 
+            auto_subscribes: Vec::new(),
+        };
 
-//         let connection_state: TcpConnectionState<'_, CriticalSectionRawMutex, _, 1024> = TcpConnectionState::new(&dummy_network, None, client_config.clone());
+        let connection_state: TcpConnectionState<'_, '_, CriticalSectionRawMutex, _, _, 1024> = TcpConnectionState::new(&tcp, dns, None, client_config.clone());
 
-//         connect(&connection_state, &dummy_network);
+        connect(&connection_state, &tcp);
 
-//         let run_io_future = connection_state.run_io();
-//         let mut run_io_future = pin!(run_io_future);
+        let run_io_future = connection_state.run_io();
+        let mut run_io_future = pin!(run_io_future);
 
-//         // Nothing to send and retrieve
-//         assert_pending(run_io_future.as_mut());
-//         assert_pending(run_io_future.as_mut());
-//         assert_pending(run_io_future.as_mut());
-//         assert_pending(run_io_future.as_mut());
+        // Nothing to send and retrieve
+        assert_pending(run_io_future.as_mut());
+        assert_pending(run_io_future.as_mut());
+        assert_pending(run_io_future.as_mut());
+        assert_pending(run_io_future.as_mut());
 
-//         dummy_network.add_packet_to_receive(&Packet::Pingresp);
+        tcp.add_packet_to_receive(&Packet::Pingresp);
 
-//         // There is a packet to receive, return now
-//         assert_ready(run_io_future).unwrap();
-//     }
+        // There is a packet to receive, return now
+        assert_ready(run_io_future).unwrap();
+    }
 
-//     #[test]
-//     fn test_run_io_read_write() {
-//         let dummy_network = TestNetwork::new();
+    #[test]
+    fn test_run_io_read_write() {
+        let tcp = TestTcpConnect::new(); 
+        let dns = TestDns::new_single("my-mqtt-test-broker", IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
 
-//         let client_config = ClientConfig { 
-//             client_id: heapless::String::try_from("clien-12345").unwrap(), 
-//             credentials: None, 
-//             auto_subscribes: Vec::new(),
-//         };
+        let client_config = ClientConfig {
+            host: Host::Hostname("my-mqtt-test-broker"),
+            port: None,
+            client_id: "clien-12345", 
+            credentials: None, 
+            auto_subscribes: Vec::new(),
+        };
 
-//         let connection_state: TcpConnectionState<'_, CriticalSectionRawMutex, _, 1024> = TcpConnectionState::new(&dummy_network, None, client_config.clone());
-//         connect(&connection_state, &dummy_network);
+        let connection_state: TcpConnectionState<'_, '_, CriticalSectionRawMutex, _, _, 1024> = TcpConnectionState::new(&tcp, dns, None, client_config.clone());
+        connect(&connection_state, &tcp);
 
-//         assert!(connection_state.try_write_packet(&Packet::Pingreq).unwrap());
+        assert!(connection_state.try_write_packet(&Packet::Pingreq).unwrap());
 
-//         let run_io_future = connection_state.run_io();
-//         let mut run_io_future = pin!(run_io_future);
+        let run_io_future = connection_state.run_io();
+        let mut run_io_future = pin!(run_io_future);
 
-//         // Nothing to send and retrieve
-//         assert_pending(run_io_future.as_mut());
-//         dummy_network.assert_packet_written(|p| {
-//             assert_eq!(p, Packet::Pingreq);
-//         });
+        // Nothing to send and retrieve
+        assert_pending(run_io_future.as_mut());
+        tcp.assert_packet_written(|p| {
+            assert_eq!(*p, Packet::Pingreq);
+        });
 
-//         dummy_network.add_packet_to_receive(&Packet::Pingresp);
+        tcp.add_packet_to_receive(&Packet::Pingresp);
 
-//         // There is a packet to receive, return now
-//         assert_ready(run_io_future).unwrap();
-//     }
+        // There is a packet to receive, return now
+        assert_ready(run_io_future).unwrap();
+    }
 
-//     #[test]
-//     fn test_run_io_nonblocking_read_write() {
-//         let dummy_network = TestNetwork::new();
+    #[test]
+    fn test_run_io_nonblocking_read_write() {
+        let tcp = TestTcpConnect::new(); 
+        let dns = TestDns::new_single("my-mqtt-test-broker", IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
 
-//         let client_config = ClientConfig { 
-//             client_id: heapless::String::try_from("clien-12345").unwrap(), 
-//             credentials: None, 
-//             auto_subscribes: Vec::new(),
-//         };
+        let client_config = ClientConfig {
+            host: Host::Hostname("my-mqtt-test-broker"),
+            port: None,
+            client_id: "clien-12345", 
+            credentials: None, 
+            auto_subscribes: Vec::new(),
+        };
 
-//         let connection_state: TcpConnectionState<'_, CriticalSectionRawMutex, _, 1024> = TcpConnectionState::new(&dummy_network, None, client_config.clone());
-//         connect(&connection_state, &dummy_network);
+        let connection_state: TcpConnectionState<'_, '_, CriticalSectionRawMutex, _, _, 1024> = TcpConnectionState::new(&tcp, dns, None, client_config.clone());
+        connect(&connection_state, &tcp);
 
-//         // First time: Nothing to send and something to retrieve
-//         let run_io_future = connection_state.run_io_nonblocking();
+        // First time: Nothing to send and something to retrieve
+        let run_io_future = connection_state.run_io_nonblocking();
 
-//         // Nothing to send and retrieve
-//         assert_ready_pin(run_io_future).unwrap();
-//         dummy_network.assert_nothing_written();
+        // Nothing to send and retrieve
+        assert_ready_pin(run_io_future).unwrap();
+        tcp.assert_nothing_written();
         
 
-//         // Second time: something to send and nothing to retrieve
-//         assert!(connection_state.try_write_packet(&Packet::Pingreq).unwrap());
-//         let run_io_future = connection_state.run_io_nonblocking();
-//         let result = assert_ready_pin(run_io_future).unwrap();
-//         assert!(result.is_none());
-//     }
+        // Second time: something to send and nothing to retrieve
+        assert!(connection_state.try_write_packet(&Packet::Pingreq).unwrap());
+        let run_io_future = connection_state.run_io_nonblocking();
+        let result = assert_ready_pin(run_io_future).unwrap();
+        assert!(result.is_none());
+    }
 
-//     #[test]
-//     fn test_disconnect() {
-//         let dummy_network = TestNetwork::new();
+    #[test]
+    fn test_disconnect() {
+        let tcp = TestTcpConnect::new(); 
+        let dns = TestDns::new_single("my-mqtt-test-broker", IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
 
-//         let client_config = ClientConfig { 
-//             client_id: heapless::String::try_from("clien-12345").unwrap(), 
-//             credentials: None, 
-//             auto_subscribes: Vec::new(),
-//         };
+        let client_config = ClientConfig {
+            host: Host::Hostname("my-mqtt-test-broker"),
+            port: None,
+            client_id: "clien-12345", 
+            credentials: None, 
+            auto_subscribes: Vec::new(),
+        };
 
-//         let connection_state: TcpConnectionState<'_, CriticalSectionRawMutex, _, 1024> = TcpConnectionState::new(&dummy_network, None, client_config.clone());
-//         connect(&connection_state, &dummy_network);
+        let connection_state: TcpConnectionState<'_, '_, CriticalSectionRawMutex, _, _, 1024> = TcpConnectionState::new(&tcp, dns, None, client_config.clone());
+        connect(&connection_state, &tcp);
 
-//         let disconnect_future = connection_state.disconnect();
-//         assert_ready_pin(disconnect_future).unwrap();
+        let disconnect_future = connection_state.disconnect();
+        assert_ready_pin(disconnect_future).unwrap();
 
-//         dummy_network.assert_packet_written(|p| {
-//             assert_eq!(p.get_type(), PacketType::Disconnect);
-//         });
+        tcp.assert_packet_written(|p| {
+            assert_eq!(p.get_type(), PacketType::Disconnect);
+        });
 
-//         assert_eq!(dummy_network.connections_closed.load(core::sync::atomic::Ordering::Acquire), 1);
-//         assert_eq!(connection_state.inner.dyn_receiver().unwrap().try_get(), Some(ConnectionStateValue::Disconnected));
+        // assert_eq!(tcp.connections_closed.load(core::sync::atomic::Ordering::Acquire), 1);
+        assert_eq!(connection_state.inner.dyn_receiver().unwrap().try_get(), Some(ConnectionStateValue::Disconnected));
 
-//     }
+    }
 
 
-// }
+}
 

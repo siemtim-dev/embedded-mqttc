@@ -322,15 +322,32 @@ impl <const PARALLEL_PUBLISHES: usize, const BUFFER: usize, const TOPIC_SIZE: us
         Ok(SendResult::SentAll)
     }
 
+    fn resend_pubrel(&mut self, connection: &impl ConnectionState) -> Result<SendResult, MqttError>  {
+        let now = time::now();
+
+        // resend pubrel waiting for pubcomp
+        for pending in self.await_pubcomp.iter_mut().filter(|pending| now - pending.pubrel_sent > RESEND_DURATION) {
+            let sent = connection.try_write_packet(&Packet::Pubrel(pending.pid))?;
+            if sent {
+                warn!("resend pubrel {}", pending.pid);
+                pending.pubrel_sent = now;
+            } else {
+                warn!("could not resend pubrel: send buffer full");
+                return Ok(SendResult::PartiallySent);
+            }
+        }
+
+        Ok(SendResult::SentAll)
+    }
+
 
 
     pub async fn send_packets(&mut self, connection: &impl ConnectionState, publisher: DynPublisher<'_, MqttEvent>) -> Result<SendResult, MqttError> {        
         info!("publishes: send_packets");
         self.send_pending_pubrel(connection)?
             .next(|| self.send_pending_publishes(connection, publisher)).await?
-            .next_sync(|| self.resend_publishes(connection))
-
-        // TODO resend pubrel
+            .next_sync(|| self.resend_publishes(connection))?
+            .next_sync(|| self.resend_pubrel(connection))
     }
 }
 

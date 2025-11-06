@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 use embassy_sync::waitqueue::WakerRegistration;
 use embedded_io_async::{ErrorType, Read, Write};
 use embedded_nal_async::{AddrType, Dns, TcpConnect};
-use mqttrs2::{Packet, decode_slice, encode_slice};
+use mqttrs2::{Packet, decode_slice, decode_slice_with_len, encode_slice};
 
 use crate::state::connection::{ConnectionState, ConnectionStateValue};
 
@@ -226,11 +226,38 @@ impl TestTcpConnect {
         }
     }
 
+    pub fn add_packet_to_receive(&self, packet: &Packet<'_>) {
+        let mut buf = [0; 1024];
+        let n = encode_slice(packet, &mut buf).unwrap();
+        let mut bytes_received = self.bytes_received.lock().unwrap();
+        let mut read_wakers = self.read_wakers.lock().unwrap();
+        bytes_received.extend_from_slice(&buf[..n]);
+        read_wakers.wake();
+    }
+
+    pub fn assert_packet_written<F: FnOnce(&Packet<'_>)>(&self, f: F) {
+        let mut bytes_sent = self.bytes_sent.lock().unwrap();
+
+        match decode_slice_with_len(&bytes_sent) {
+            Err(err) => panic!("error decoding packet: {:?}", err),
+            Ok(None) => panic!("no complete packet written"),
+            Ok(Some((len, packet))) => {
+                f(&packet);
+                let _ = bytes_sent.drain(..len);
+            }
+        } 
+    }
+
     pub fn add_bytes_to_receive(&self, buf: &[u8]) {
         let mut bytes_received = self.bytes_received.lock().unwrap();
         let mut read_wakers = self.read_wakers.lock().unwrap();
         bytes_received.extend_from_slice(buf);
         read_wakers.wake();
+    }
+
+    pub fn assert_nothing_written(&self) {
+        let bytes_sent = self.bytes_sent.lock().unwrap();
+        assert!(bytes_sent.is_empty(), "expected no bytes written, but found some");
     }
 
 }

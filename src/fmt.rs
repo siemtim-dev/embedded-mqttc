@@ -29,9 +29,9 @@ macro_rules! trace {
     ($s:literal $(, $x:expr)* $(,)?) => {
         #[cfg(feature = "defmt")]
         ::defmt::trace!($s $(, $x)*);
-        #[cfg(feature = "tracing")]
+        #[cfg(test)]
         ::tracing::trace!($s $(, crate::fmt::Debug2Format($x))*);
-        #[cfg(not(any(feature="defmt", feature = "tracing")))]
+        #[cfg(not(any(feature="defmt", test)))]
         let _ = ($( & $x ),*);
     };
 }
@@ -42,9 +42,9 @@ macro_rules! debug {
     ($s:literal $(, $x:expr)* $(,)?) => {
         #[cfg(feature = "defmt")]
         ::defmt::debug!($s $(, $x)*);
-        #[cfg(feature = "tracing")]
+        #[cfg(test)]
         ::tracing::debug!($s $(, crate::fmt::Debug2Format($x))*);
-        #[cfg(not(any(feature="defmt", feature = "tracing")))]
+        #[cfg(not(any(feature="defmt", test)))]
         let _ = ($( & $x ),*);
     };
 }
@@ -54,9 +54,9 @@ macro_rules! info {
     ($s:literal $(, $x:expr)* $(,)?) => {
         #[cfg(feature = "defmt")]
         ::defmt::info!($s $(, $x)*);
-        #[cfg(feature = "tracing")]
+        #[cfg(test)]
         ::tracing::info!($s $(, crate::fmt::Debug2Format($x))*);
-        #[cfg(not(any(feature="defmt", feature = "tracing")))]
+        #[cfg(not(any(feature = "defmt", test)))]
         let _ = ($( & $x ),*);
     };
 }
@@ -66,9 +66,9 @@ macro_rules! warn {
     ($s:literal $(, $x:expr)* $(,)?) => {
         #[cfg(feature = "defmt")]
         ::defmt::warn!($s $(, $x)*);
-        #[cfg(feature = "tracing")]
+        #[cfg(test)]
         ::tracing::warn!($s $(, crate::fmt::Debug2Format($x))*);
-        #[cfg(not(any(feature="defmt", feature = "tracing")))]
+        #[cfg(not(any(feature = "defmt", test)))]
         let _ = ($( & $x ),*);
     };
 }
@@ -78,9 +78,9 @@ macro_rules! error {
     ($s:literal $(, $x:expr)* $(,)?) => {
         #[cfg(feature = "defmt")]
         ::defmt::error!($s $(, $x)*);
-        #[cfg(feature = "tracing")]
+        #[cfg(test)]
         ::tracing::error!($s $(, crate::fmt::Debug2Format($x))*);
-        #[cfg(not(any(feature="defmt", feature = "tracing")))]
+        #[cfg(not(any(feature = "defmt", test)))]
         let _ = ($( & $x ),*);
     };
 }

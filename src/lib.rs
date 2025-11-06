@@ -3,6 +3,7 @@
 use core::{cell::RefCell, net::IpAddr};
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+use embedded_nal_async::{AddrType, Dns};
 use heapless::{Deque, String};
 use thiserror::Error;
 
@@ -10,6 +11,8 @@ use heapless::Vec;
 
 use mqttrs2::{Pid, QosPid};
 pub use mqttrs2::QoS;
+
+use crate::fmt::Debug2Format;
 
 // This must come first so the macros are visible
 pub(crate) mod fmt;
@@ -75,7 +78,7 @@ pub enum MqttError {
 }
 impl MqttError {
     pub(crate) fn new_dns(err: &dyn core::fmt::Debug) -> Self {
-        error!("dns failed: {:?}", err);
+        error!("dns failed: {:?}", Debug2Format(err));
         Self::DnsFailed
     }
 }
@@ -147,11 +150,46 @@ impl AutoSubscribe {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Host<'a> {
     Hostname(&'a str),
     Ip(IpAddr)
 }
+
+#[cfg(all(feature = "ipv4", not(feature = "ipv6")))]
+const IP_ADDR_TYPE: AddrType = AddrType::IPv4;
+
+#[cfg(all(feature = "ipv6", not(feature = "ipv4")))]
+const IP_ADDR_TYPE: AddrType = AddrType::IPv6;
+
+#[cfg(all(feature = "ipv4", feature = "ipv6"))]
+const IP_ADDR_TYPE: AddrType = AddrType::Either;
+
+impl<'a> Host<'a> {
+
+    #[cfg(any(feature = "ipv4", feature = "ipv6"))]
+    pub(crate) async fn resolve(&self, dns: &impl Dns) -> Result<IpAddr, MqttError> {
+        match self {
+            crate::Host::Hostname(host) => {
+                debug!("query dns to resolve hostname {}", host);
+                let ip = dns.get_host_by_name(host, IP_ADDR_TYPE).await
+                    .map_err(|err| MqttError::new_dns(&err))?;
+                debug!("dns resolved {} to {}", host, &ip);
+                Ok(ip)
+            },
+            crate::Host::Ip(ip) => Ok(ip.clone()),
+        }
+    }
+
+    #[cfg(all(not(feature = "ipv6"), not(feature = "ipv4")))]
+    pub(crate) async fn resolve(&self, dns: &impl Dns) -> Result<IpAddr, MqttError> {
+        match self {
+            crate::Host::Hostname(host) => panic!("dns resolution not supported, activate feature ipv4 or ipv6"),
+            crate::Host::Ip(ip) => Ok(ip.clone()),
+        }
+    }
+}
+
 
 #[derive(Clone)]
 pub struct ClientConfig<'a> {
@@ -260,6 +298,7 @@ impl UniqueIDPool {
 static UNIQUE_ID_POOL: Mutex<CriticalSectionRawMutex, RefCell<UniqueIDPool>> = Mutex::new(RefCell::new(UniqueIDPool::new()));
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct UniqueID(u32);
 
 #[cfg(test)]

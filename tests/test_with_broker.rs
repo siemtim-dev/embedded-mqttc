@@ -321,7 +321,6 @@ async fn test_broker_publish() {
         client.publish(&topic, payload, QoS::AtLeastOnce, false).await.unwrap();
         client.disconnect();
         
-        #[cfg(feature = "tracing")]
         tracing::debug!("TEST: publish_future done");
     };
 
@@ -334,7 +333,6 @@ async fn test_broker_publish() {
         assert_eq!(payload_str, "test-payload-hjh3");
         client.disconnect().await.unwrap();
         
-        #[cfg(feature = "tracing")]
         tracing::trace!("TEST: subscribe_future done");
     };
 

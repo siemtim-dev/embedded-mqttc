@@ -14,7 +14,6 @@ const KEEP_ALIVE_DURATION: Duration = Duration::from_secs(KEEP_ALIVE as u64);
 const ERROR_CORRECTING_DURATION: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum PingStateInner {
     PingSuccess(Instant),
 

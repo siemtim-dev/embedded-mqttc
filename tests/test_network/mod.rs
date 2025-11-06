@@ -4,10 +4,9 @@
 use dns_lookup::lookup_host;
 use embedded_nal_async::{Dns, TcpConnect};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpStream}};
+use tracing::{error, info, trace};
 
 fn map_std_err(err: std::io::Error) -> embedded_io_async::ErrorKind {
-    #[cfg(feature = "tracing")]
-    tracing::error!("error in test network: {}", err);
 
     match err.kind() {
         std::io::ErrorKind::NotFound => embedded_io_async::ErrorKind::NotFound,
@@ -35,20 +34,44 @@ pub struct TestConnection(TcpStream);
 
 impl embedded_io_async::Read for TestConnection {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.0.read(buf).await
-            .map_err(map_std_err)
+        match self.0.read(buf).await {
+            Ok(n) => {
+                trace!("read {} bytes from test network", n);
+                Ok(n)
+            },
+            Err(err) => {
+                error!("error reading from test network: {}", err);
+                Err(map_std_err(err))
+            }
+        }
     }
 }
 
 impl embedded_io_async::Write for TestConnection {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.0.write(buf).await
-            .map_err(map_std_err)
+        match self.0.write(buf).await {
+            Ok(n) => {
+                trace!("wrote {} bytes to test network", n);
+                Ok(n)
+            },
+            Err(err) => {
+                error!("error writing to test network: {}", err);
+                Err(map_std_err(err))
+            }
+        }
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.flush().await
-            .map_err(map_std_err)
+        match self.0.flush().await {
+            Ok(()) => {
+                trace!("flushed test network");
+                Ok(())
+            },
+            Err(err) => {
+                error!("error flushing test network: {}", err);
+                Err(map_std_err(err))
+            }
+        }
     }
 }
 
@@ -68,25 +91,29 @@ impl Dns for TestNetwork {
             addr_type: embedded_nal_async::AddrType,
         ) -> Result<std::net::IpAddr, Self::Error> {
         
-        // This should better be an async lookup but it is fine for testing
-        let addrs = lookup_host(host)
-            .map_err(map_std_err)?;
+        tracing::info!("looking up addr for {}", host);
+        let host = String::from(host);
+        tokio::task::spawn_blocking(move || {
+            // This should better be an async lookup but it is fine for testing
+            let addrs = lookup_host(&host)
+                .map_err(map_std_err)?;
 
-        for addr in addrs {
-            let is_ok = match addr_type {
-                embedded_nal_async::AddrType::IPv4 => addr.is_ipv4(),
-                embedded_nal_async::AddrType::IPv6 => addr.is_ipv6(),
-                embedded_nal_async::AddrType::Either => true,
-            };
-            if is_ok {
-                return Ok(addr);
-            } else {
-                #[cfg(feature = "tracing")]
-                tracing::warn!("ignoring addr {} for {}", addr, host);
+            for addr in addrs {
+                let is_ok = match addr_type {
+                    embedded_nal_async::AddrType::IPv4 => addr.is_ipv4(),
+                    embedded_nal_async::AddrType::IPv6 => addr.is_ipv6(),
+                    embedded_nal_async::AddrType::Either => true,
+                };
+                if is_ok {
+                    info!("resolved {} to {}", &host, &addr);
+                    return Ok(addr);
+                } else {
+                    tracing::warn!("ignoring addr {} for {}", addr, host);
+                }
             }
-        }
-
-        Err(embedded_io_async::ErrorKind::NotFound)
+            error!("could not resolve {}", host);
+            Err(embedded_io_async::ErrorKind::NotFound)
+        }).await.unwrap()
     }
 
     async fn get_host_by_address(
@@ -94,6 +121,7 @@ impl Dns for TestNetwork {
             _addr: std::net::IpAddr,
             _result: &mut [u8],
         ) -> Result<usize, Self::Error> {
+        // not needed for testing, so left unimplemented
         unimplemented!()
     }
 }
