@@ -174,7 +174,7 @@ impl<'a> Host<'a> {
                 debug!("query dns to resolve hostname {}", host);
                 let ip = dns.get_host_by_name(host, IP_ADDR_TYPE).await
                     .map_err(|err| MqttError::new_dns(&err))?;
-                debug!("dns resolved {} to {}", host, &ip);
+                debug!("dns resolved {} to {}", host, Debug2Format(&ip));
                 Ok(ip)
             },
             crate::Host::Ip(ip) => Ok(ip.clone()),

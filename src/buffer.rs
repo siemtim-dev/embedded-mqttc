@@ -1,7 +1,5 @@
 use core::{cell::{Cell, UnsafeCell}, ops::{Deref, DerefMut}};
 
-
-
 pub struct StackBufferCell<const N: usize> {
     buffer: UnsafeCell<StackBuffer<N>>,
     borrows: Cell<usize>

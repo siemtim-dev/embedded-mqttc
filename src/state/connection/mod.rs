@@ -6,7 +6,7 @@ use embedded_nal_async::{Dns, TcpConnect};
 use embedded_io_async::{Read, Write, Error};
 use mqttrs2::{Connack, Connect, LastWill, Packet, Protocol, Suback, Subscribe, decode_slice_with_len, encode_slice};
 
-use crate::{AutoSubscribe, ClientConfig, MqttError, buffer::{MappedBufferRef, StackBufferCell}, state::pid::next_pid};
+use crate::{AutoSubscribe, ClientConfig, MqttError, buffer::{MappedBufferRef, StackBufferCell}, fmt::Debug2Format, state::pid::next_pid};
 
 const MQTT_DEFAULT_PORT: u16 = 1883;
 
@@ -39,11 +39,11 @@ fn network_try_read(connection: &mut impl Read, buf: &mut [u8]) -> Result<usize,
             Ok(n)
         },
         core::task::Poll::Ready(Err(err)) => {
-            trace!("network_try_read err: {}", &err);
+            trace!("network_try_read err: {}", Debug2Format(&err));
             Err(MqttError::ConnectionFailed2(err.kind()))
         },
         core::task::Poll::Pending => {
-            trace!("try_network_read did not reaad anything");
+            trace!("try_network_read did not read anything");
             Ok(0)
         },
     }
@@ -427,7 +427,7 @@ where NETWORK: TcpConnect, DNS: Dns {
             let ip = self.config.host.resolve(&self.dns).await?;
             let addr = SocketAddr::new(ip, port);
 
-            trace!("start connecting to socket addr {}", &addr);
+            trace!("start connecting to socket addr {}", Debug2Format(&addr));
             let connection = self.network.connect(addr).await
                 .map_err(|err| MqttError::ConnectionFailed2(err.kind()))?;
             trace!("successfully established tcp connection to broker");
