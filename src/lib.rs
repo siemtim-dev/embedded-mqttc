@@ -1,68 +1,49 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::{cell::Cell, ops::Deref};
+use core::{cell::RefCell, net::IpAddr};
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
-use heapless::String;
+use embedded_nal_async::{AddrType, Dns};
+use heapless::{Deque, String};
 use thiserror::Error;
 
 use heapless::Vec;
 
-pub use embytes_buffer::*;
-
-use mqttrs2::{Pid, Publish, QosPid};
+use mqttrs2::{Pid, QosPid};
 pub use mqttrs2::QoS;
+
+use crate::fmt::Debug2Format;
 
 // This must come first so the macros are visible
 pub(crate) mod fmt;
 
-pub mod io;
-pub(crate) mod state;
-use state::sub::MAX_CONCURRENT_REQUESTS;
+pub mod state;
 
 pub(crate) mod time;
 pub mod client;
 
-pub(crate) mod misc;
+pub(crate) mod buffer;
 
-pub mod queue_vec;
+pub mod packet;
 
-pub mod network;
+pub(crate) mod mutex;
 
+#[cfg(test)]
+pub mod testutils;
 
-static COUNTER: Mutex<CriticalSectionRawMutex, Cell<u64>> = Mutex::new(Cell::new(0));
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct UniqueID(u64);
-
-impl UniqueID {
-    pub fn new() -> Self {
-        Self(COUNTER.lock(|inner|{
-            let value = inner.get();
-            inner.set(value + 1);
-            value
-        }))
-    }
-}
-
-impl Deref for UniqueID {
-    type Target = u64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[derive(Debug, Error, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MqttError {
 
-    #[error("TCP Connection failed")]
-    ConnectionFailed(network::NetworkError),
+    #[error("TCP conenction failed")]
+    ConnectionFailed2(embedded_io_async::ErrorKind),
 
-    #[error("The buffer is full")]
-    BufferFull,
+    #[error("DNS failed")]
+    DnsFailed,
+
+    #[error("buffer too small")]
+    BufferTooSmall,
 
     #[error("connection rejected by broker")]
     ConnackError,
@@ -71,7 +52,7 @@ pub enum MqttError {
     AuthenticationError,
 
     #[error("Error while encoding and decoding packages")]
-    CodecError,
+    CodecError(mqttrs2::Error),
 
     #[error("Payload of received message is too long")]
     ReceivedMessageTooLong,
@@ -80,27 +61,59 @@ pub enum MqttError {
     SubscribeOrUnsubscribeFailed,
 
     #[error("Some internal error occured")]
-    InternalError
+    InternalError,
+
+    /// The send queue is full. According to the mqtt spec the connection should be closed in this situation
+    #[error("sending packet `{0:?}`: send queue full")]
+    QueueFull(QosPid),
+
+    #[error("received ack for unknown pid `{0:?}`")]
+    UnexpectedAck(Pid),
+
+    #[error("error with pubsub: `{0:?}`")]
+    PubsubError(embassy_sync::pubsub::Error),
+
+    #[error("topic size too big")]
+    TopicSizeError,
+}
+impl MqttError {
+    pub(crate) fn new_dns(err: &dyn core::fmt::Debug) -> Self {
+        error!("dns failed: {:?}", Debug2Format(err));
+        Self::DnsFailed
+    }
+}
+
+impl From<embedded_io_async::ErrorKind> for MqttError {
+    fn from(err_kind: embedded_io_async::ErrorKind) -> Self {
+        Self::ConnectionFailed2(err_kind)
+    }
+}
+
+impl From<embassy_sync::pubsub::Error>  for MqttError {
+    fn from(err: embassy_sync::pubsub::Error) -> Self {
+        Self::PubsubError(err)
+    }
+}
+
+impl From<mqttrs2::Error> for MqttError {
+    fn from(value: mqttrs2::Error) -> Self {
+        Self::CodecError(value)
+    }
 }
 
 
 /// Credentials used to connecto to the broker
 #[derive(Clone)]
-pub struct ClientCredentials {
-    pub username: String<32>,
-    pub password: String<128>,
+pub struct ClientCredentials<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
 }
 
-impl ClientCredentials {
-    pub fn new(username: &str, password: &str) -> Self {
-        let mut this = Self {
-            username: String::new(),
-            password: String::new()
-        };
-
-        this.username.push_str(username).unwrap();
-        this.password.push_str(password).unwrap();
-        this
+impl <'a> ClientCredentials<'a> {
+    pub fn new(username: &'a str, password: &'a str) -> Self {
+        Self {
+            username, password
+        }
     }
 }
 
@@ -111,6 +124,19 @@ impl ClientCredentials {
 pub struct AutoSubscribe {
     pub topic: Topic,
     pub qos: QoS
+}
+
+impl TryInto<mqttrs2::SubscribeTopic> for &AutoSubscribe {
+    type Error = MqttError;
+
+    fn try_into(self) -> Result<mqttrs2::SubscribeTopic, Self::Error> {
+        let topic = mqttrs2::SubscribeTopic {
+            qos: self.qos,
+            topic_path: String::try_from(self.topic.as_ref())
+                .map_err(|_| MqttError::TopicSizeError)?
+        };
+        Ok(topic)
+    }
 }
 
 impl AutoSubscribe {
@@ -124,30 +150,73 @@ impl AutoSubscribe {
     }
 }
 
-#[derive(Clone)]
-pub struct ClientConfig {
-    pub client_id: String<128>,
-    pub credentials: Option<ClientCredentials>,
-    pub auto_subscribes: Vec<AutoSubscribe, MAX_CONCURRENT_REQUESTS>
+#[derive(Debug, Clone)]
+pub enum Host<'a> {
+    Hostname(&'a str),
+    Ip(IpAddr)
 }
 
-impl ClientConfig {
-    pub fn new(client_id: &str, credentials: Option<ClientCredentials>) -> Self {
-        let mut cid = String::new();
-        cid.push_str(client_id).unwrap();
+#[cfg(all(feature = "ipv4", not(feature = "ipv6")))]
+const IP_ADDR_TYPE: AddrType = AddrType::IPv4;
+
+#[cfg(all(feature = "ipv6", not(feature = "ipv4")))]
+const IP_ADDR_TYPE: AddrType = AddrType::IPv6;
+
+#[cfg(all(feature = "ipv4", feature = "ipv6"))]
+const IP_ADDR_TYPE: AddrType = AddrType::Either;
+
+impl<'a> Host<'a> {
+
+    #[cfg(any(feature = "ipv4", feature = "ipv6"))]
+    pub(crate) async fn resolve(&self, dns: &impl Dns) -> Result<IpAddr, MqttError> {
+        match self {
+            crate::Host::Hostname(host) => {
+                debug!("query dns to resolve hostname {}", host);
+                let ip = dns.get_host_by_name(host, IP_ADDR_TYPE).await
+                    .map_err(|err| MqttError::new_dns(&err))?;
+                debug!("dns resolved {} to {}", host, &ip);
+                Ok(ip)
+            },
+            crate::Host::Ip(ip) => Ok(ip.clone()),
+        }
+    }
+
+    #[cfg(all(not(feature = "ipv6"), not(feature = "ipv4")))]
+    pub(crate) async fn resolve(&self, dns: &impl Dns) -> Result<IpAddr, MqttError> {
+        match self {
+            crate::Host::Hostname(host) => panic!("dns resolution not supported, activate feature ipv4 or ipv6"),
+            crate::Host::Ip(ip) => Ok(ip.clone()),
+        }
+    }
+}
+
+
+#[derive(Clone)]
+pub struct ClientConfig<'a> {
+    pub host: Host<'a>,
+    pub port: Option<u16>,
+    pub client_id: &'a str,
+    pub credentials: Option<ClientCredentials<'a>>,
+    pub auto_subscribes: Vec<AutoSubscribe, 10>
+}
+
+impl <'a> ClientConfig<'a> {
+    pub fn new(host: Host<'a>, port: Option<u16>, client_id: &'a str, credentials: Option<ClientCredentials<'a>>) -> Self {
         Self {
-            client_id: cid,
+            host,
+            port,
+            client_id,
             credentials,
             auto_subscribes: Vec::new()
         }
     }
 
-    pub fn new_with_auto_subscribes<'a>(client_id: &str, credentials: Option<ClientCredentials>, auto_subscribes: impl Iterator<Item = &'a str>, qos: QoS) -> Self {
-        let mut cid = String::new();
-        cid.push_str(client_id).unwrap();
+    pub fn new_with_auto_subscribes<'b>(host: Host<'a>, port: Option<u16>, client_id: &'a str, credentials: Option<ClientCredentials<'a>>, auto_subscribes: impl Iterator<Item = &'b str>, qos: QoS) -> Self {
 
         let mut this = Self {
-            client_id: cid,
+            host,
+            port,
+            client_id,
             credentials,
             auto_subscribes: Vec::new()
         };
@@ -172,99 +241,82 @@ pub const MQTT_PAYLOAD_MAX_SIZE: usize = 1024;
 
 pub type Topic = heapless::String<MAX_TOPIC_SIZE>;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct MqttPublish {
-    pub topic: Topic,
-    pub payload: Buffer<[u8; MQTT_PAYLOAD_MAX_SIZE]>,
-    pub qos: QoS,
-    pub retain: bool,
-}
-
-impl MqttPublish {
-
-    pub fn new(topic: &str, payload: &[u8], qos: QoS, retain: bool) -> Self {
-        let mut s = Self {
-            topic: Topic::new(),
-            payload: new_stack_buffer(),
-            qos, retain
-        };
-        s.topic.push_str(topic).unwrap();
-        s.payload.push(payload).unwrap();
-
-        s
-    }
-
-}
-
-impl <'a> TryFrom<&Publish<'a>> for MqttPublish {
-    type Error = MqttError;
-
-    fn try_from(value: &Publish<'a>) -> Result<Self, Self::Error> {
-        let mut topic = Topic::new();
-        if let Err(_) = topic.push_str(value.topic_name) {
-            warn!("Topic of received message is longer than {}: {}", MAX_TOPIC_SIZE, value.topic_name.len());
-            return Err(MqttError::ReceivedMessageTooLong);
-        }
-
-        let mut payload = new_stack_buffer();
-        if let Err(_e) = payload.push(&value.payload) {
-            warn!("Payload of received message is longer than {}: {}", MQTT_PAYLOAD_MAX_SIZE, value.payload.len());
-        }
-
-        let qos = value.qospid.qos();
-
-        Ok(Self {
-            topic, payload, qos,
-            retain: value.retain
-        })
-    }
-}
-
-impl  MqttPublish {
-    pub(crate) fn create_publish<'a>(&'a self, pid: Pid, dup: bool) -> Publish<'a> {
-        let qospid = match self.qos {
-            QoS::AtMostOnce => QosPid::AtMostOnce,
-            QoS::AtLeastOnce => QosPid::AtLeastOnce(pid),
-            QoS::ExactlyOnce => QosPid::ExactlyOnce(pid),
-        };
-
-        Publish {
-            dup,
-            qospid,
-            retain: self.retain,
-            topic_name: &self.topic,
-            payload: self.payload.data()
-        }
-    }
-}
-
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum MqttEvent {
+pub(crate) enum MqttEvent {
 
-    Connected,
-    InitialSubscribesDone,
-
-    PublishResult(UniqueID, Result<(), MqttError>),
-    SubscribeResult(UniqueID, Result<QoS, MqttError>),
-    UnsubscribeResult(UniqueID, Result<(), MqttError>)
+    PublishDone(UniqueID),
+    SubscribeDone(UniqueID, Result<QoS, MqttError>),
+    UnsubscribeDone(UniqueID)
 }
 
+struct UniqueIDPool {
+    next_unused: u32,
+    pool: Deque<u32, 16>
+}
+
+impl UniqueIDPool {
+
+    const fn new() -> Self {
+        Self {
+            next_unused: 0,
+            pool: Deque::new()
+        }
+    }
+
+    fn next(&mut self) -> UniqueID {
+        if let Some(id) = self.pool.pop_front() {
+            UniqueID(id)
+        } else {
+            self.take()
+        }
+    }
+
+    fn take(&mut self) -> UniqueID {
+        let id = self.next_unused;
+        if self.next_unused == u32::MAX {
+            panic!("used up all unique ids");
+        } else {
+            self.next_unused += 1;
+        }
 
 
-#[derive(Debug)]
+        UniqueID(id)
+    }
+
+    fn free(&mut self, id: UniqueID) {
+        self.pool.push_back(id.0)
+            .inspect_err(|err| {
+                error!("UniqueId pool full, dropping {} forever", err);
+            })
+        .unwrap()
+    }
+
+}
+
+static UNIQUE_ID_POOL: Mutex<CriticalSectionRawMutex, RefCell<UniqueIDPool>> = Mutex::new(RefCell::new(UniqueIDPool::new()));
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum MqttRequest {
+pub(crate) struct UniqueID(u32);
 
-    Publish(MqttPublish, UniqueID),
+#[cfg(test)]
+impl From<u32> for UniqueID {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
 
-    Subscribe(Topic, UniqueID),
+impl UniqueID {
 
-    Unsubscribe(Topic, UniqueID),
+    pub(crate) fn new() -> Self {
+        UNIQUE_ID_POOL.lock(|inner| inner.borrow_mut().next())
+    }
 
-    Disconnect,
+    pub(crate) fn free(self) {
+        UNIQUE_ID_POOL.lock(|inner| inner.borrow_mut().free(self))
+    }
 
 }
 

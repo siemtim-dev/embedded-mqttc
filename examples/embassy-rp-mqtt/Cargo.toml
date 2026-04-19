@@ -1,0 +1,40 @@
+[package]
+name = "example-embassy-rp-mqtt"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "example-embassy-rp-mqtt"
+path = "src/main.rs"
+
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+defmt = "1.0.1"
+defmt-rtt = "1.1.0"
+embassy-executor = { version = "0.9.1", default-features = false, features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-net = { version = "0.7.1", default-features = false, features = [ "defmt", "tcp", "dns", "dhcpv4", "medium-ethernet", "proto-ipv4", "proto-ipv6",  "medium-ip"] }
+embassy-rp = { version = "0.8.0", default-features = false, features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-sync = { version = "0.7.2", default-features = false, features = ["defmt"] }
+embassy-time = { version = "0.5.0", default-features = false, features = ["defmt", "defmt-timestamp-uptime"] }
+embedded-io-async = "0.6.1"
+embedded-nal-async = "0.8.0"
+heapless = "0.8.0"
+panic-probe = "1.0.0"
+portable-atomic = { version = "1.11.1", features = ["critical-section"] }
+static_cell = "2.1.1"
+
+embedded-mqttc = { version = "*", path = "../..", default-features = false, features = [ "defmt", "embassy", "ipv4" ]}
+rand = { version = "0.9.2", default-features = false }
+cyw43 = { version = "0.5.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "0.8.0", features = ["defmt"] }
+embassy-futures = "0.1.2"
+cyw43-firmware = { version = "0.1.0", features = ["wifi"] }
+
+[build-dependencies]
+dotenvy = "0.15.7"
+
+[profile.dev]
+opt-level = 3

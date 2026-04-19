@@ -1,135 +1,109 @@
 
-use embassy_sync::{blocking_mutex::raw::RawMutex, channel::{Receiver, Sender}, pubsub::{PubSubChannel, WaitResult}};
+
+use embassy_sync::{blocking_mutex::raw::RawMutex, pubsub::DynSubscriber};
+use embedded_nal_async::{Dns, TcpConnect};
 use mqttrs2::QoS;
 
-use crate::{MqttError, MqttEvent, MqttPublish, MqttRequest, Topic, UniqueID};
+use crate::{MqttError, MqttEvent, UniqueID, state::{State, connection::ConnectionState, receives2::ReceivedPublish}};
 
 /// The MQTT Client to publish messages, subscribe, unsubscribe and receive messages
 #[derive(Clone)]
-pub struct MqttClient<'a, M: RawMutex> {
-
-    pub(super) control_reveiver: &'a PubSubChannel<M, MqttEvent, 4, 16, 8>,
-    pub(super) request_sender: Sender<'a, M, MqttRequest, 4>,
-    pub(super) received_publishes: Receiver<'a, M, MqttPublish, 4>
-
+pub struct MqttClient<'a, 'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> 
+where NET: TcpConnect, DNS: Dns {
+    state: &'a State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE>
 }
 
-impl <'a, M: RawMutex> MqttClient<'a, M> {
+impl <'a, 'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> MqttClient<'a, 'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> 
+where NET: TcpConnect, DNS: Dns {
+
+    pub(crate) fn new(state: &'a State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE>) -> Self {
+        Self {
+            state
+        }
+    }
+
+    pub async fn on_auto_subscribes_done(&self) {
+        self.state.connection_state.await_connected().await;
+    }
+
+    async fn await_event<F, U>(mut subscriber: DynSubscriber<'_, MqttEvent>, f: F) -> U 
+    where F: Fn(MqttEvent) -> Option<U> {
+        loop {
+            let event = subscriber.next_message_pure().await;
+            if let Some(result) = f(event) {
+                return result;
+            }
+        }
+    } 
 
     /// Publish a MQTT message with the given parameters
     /// 
     /// Waits until there is a successful publish result. The publish is successful after all acknolodgements 
     /// accordings to the selected [`QoS`] have bee exchanged
     pub async fn publish(&self, topic: &str, payload: &[u8], qos: QoS, retain: bool) -> Result<(), MqttError> {
+        let unique_id = UniqueID::new();
+        let subscriber = self.state.subscribe_events()?;
 
-        let id = UniqueID::new();
-        let publish = MqttPublish::new(topic, payload, qos, retain);
+        self.state.publish(topic, payload, qos, retain, unique_id).await?;
 
-        let mut subscriber = self.control_reveiver.subscriber()
-            .map_err(|e| {
-                error!("error subscribing to control receiver: {}", e);
-                MqttError::InternalError
-            })?;
+        Self::await_event(subscriber, |event | match event {
+            MqttEvent::PublishDone(id) if id == unique_id => Some(()),
+            _ => None
+        }).await;
 
-        self.request_sender.send(MqttRequest::Publish(publish, id)).await;
+        unique_id.free();
 
-        loop {
-            let msg = subscriber.next_message().await;
-            if let WaitResult::Message(msg) = msg {
-                if let MqttEvent::PublishResult(msg_id, result) = msg {
-                    if id == msg_id {
-                        return result;
-                    }
-                }
-            } else {
-                error!("error reading subscrition: lost messages");
-                return Err(MqttError::InternalError);
-            }
-        }
+        Ok(())
     }
 
     /// Subscribe to a topic
     /// 
     /// The method returns after the suback has bee received
-    pub async fn subscribe(&self, topic: &str) -> Result<(), MqttError> {
-        let id = UniqueID::new();
+    pub async fn subscribe(&self, topic: &str, qos: QoS) -> Result<(), MqttError> {
+        let unique_id = UniqueID::new();
+        let subscriber = self.state.subscribe_events()?;
 
-        let mut subscriber = self.control_reveiver.subscriber()
-            .map_err(|e| {
-                error!("error subscribing to control receiver: {}", e);
-                MqttError::InternalError
-            })?;
+        self.state.subscribe(&[topic], qos, unique_id).await;
 
-        let mut topic_owned = Topic::new();
-        topic_owned.push_str(topic).unwrap();
-        self.request_sender.send(MqttRequest::Subscribe(topic_owned, id)).await;
+        let result = Self::await_event(subscriber, |event | match event {
+            MqttEvent::SubscribeDone(id, result) if id == unique_id => Some(result),
+            _ => None
+        }).await;
 
-        loop {
-            let msg = subscriber.next_message().await;
-            if let WaitResult::Message(msg) = msg {
-                if let MqttEvent::SubscribeResult(msg_id, result) = msg {
-                    if id == msg_id {
-                        return result.map(|_| ());
-                    }
-                }
-            } else {
-                error!("error reading subscrition: lost messages");
-                return Err(MqttError::InternalError);
-            }
-        }
+        unique_id.free();
+
+        result?;
+
+        Ok(())
     }
 
     /// unsubscribe from a topic
     /// 
     /// waits until the unsuback has bee received
     pub async fn unsubscribe(&self, topic: &str) -> Result<(), MqttError> {
-        let id = UniqueID::new();
+        let unique_id = UniqueID::new();
+        let subscriber = self.state.subscribe_events()?;
 
-        let mut subscriber = self.control_reveiver.subscriber()
-            .map_err(|e| {
-                error!("error subscribing to control receiver: {}", e);
-                MqttError::InternalError
-            })?;
+        self.state.unsubscribe(&[topic], unique_id).await;
 
-        let mut topic_owned = Topic::new();
-        topic_owned.push_str(topic).unwrap();
-        self.request_sender.send(MqttRequest::Unsubscribe(topic_owned, id)).await;
+        Self::await_event(subscriber, |event | match event {
+            MqttEvent::UnsubscribeDone(id) if id == unique_id => Some(()),
+            _ => None
+        }).await;
 
-        loop {
-            let msg = subscriber.next_message().await;
-            if let WaitResult::Message(msg) = msg {
-                if let MqttEvent::UnsubscribeResult(msg_id, result) = msg {
-                    if id == msg_id {
-                        return result;
-                    }
-                }
-            } else {
-                error!("error reading subscrition: lost messages");
-                return Err(MqttError::InternalError);
-            }
-        }
-    }
+        unique_id.free();
 
-    /// Waits for the next message
-    pub async fn receive(&self) -> MqttPublish {
-        self.received_publishes.receive().await
+        Ok(())
     }
 
     /// send a disconnect packet to the broker
-    pub async fn disconnect(&self) {
-        self.request_sender.send(MqttRequest::Disconnect).await;
+    pub fn disconnect(&self) {
+        self.state.disconnect();
     }
 
-    /// wait for the next event matching the `matcher`
-    pub async fn on<F>(&self, matcher: F) where F: Fn(&MqttEvent) -> bool {
-        let mut sub = self.control_reveiver.subscriber().unwrap();
-
-        loop {
-            let event = sub.next_message_pure().await;
-            if matcher(&event) {
-                break;
-            }
-        }
+    /// Subscribe to received publishes
+    pub fn subscribe_received_publishes(&self) -> Result<DynSubscriber<'_, ReceivedPublish<BUFFER, TOPIC>>, MqttError> {
+        self.state.subscribe_received_publishes()
     }
 
 }

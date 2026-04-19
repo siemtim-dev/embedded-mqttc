@@ -1,300 +1,287 @@
-use core::cell::RefCell;
+use core::future::Future;
+use core::ops::Add;
 
-use embytes_buffer::BufferWriter;
+use embassy_futures::select::select3;
+use embassy_sync::pubsub::{DynSubscriber, PubSubChannel};
+use embedded_nal_async::{Dns, TcpConnect};
 
-use crate::misc::AsVec;
+use crate::client::MqttClient;
+use crate::state::connection::{ConnectionState, TcpConnectionState};
+use crate::state::pid::next_pid;
+use crate::state::publish2::Publishes;
+use crate::state::receives2::{ReceivedPublish, Receives};
+use crate::state::request::{RequestNotification, RequestState};
+use crate::state::sub2::Subs;
+use crate::time::Duration;
 
-use embassy_sync::blocking_mutex;
 use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_sync::signal::Signal;
-use heapless::Vec;
-use mqttrs2::{encode_slice, Connack, Connect, Error, LastWill, Packet, Protocol};
-use pid::PidSource;
+use mqttrs2::{LastWill, Packet, Publish, QoS, QosPid};
 use ping::PingState;
-use publish::PublishQueue;
-use receives::ReceivedPublishQueue;
-use sub::SubQueue;
 
-use crate::io::AsyncSender;
-use crate::{time, ClientConfig, MqttError, MqttEvent, MqttPublish};
+use crate::{ClientConfig, MqttError, MqttEvent, UniqueID, time};
 
 pub(crate) const KEEP_ALIVE: usize = 60;
 
 pub(crate) mod ping;
 
-pub(crate) mod receives;
+pub(crate) mod receives2;
+
+pub mod connection;
 
 /// outgoing publishes
-pub(crate) mod publish;
-pub(crate) mod sub;
+pub(crate) mod publish2;
+
+pub(crate) mod sub2;
 pub(crate) mod pid;
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ConnectionState {
-    /// TCP Connection established, but nothis has happened yet
-    InitialState,
+pub(crate) mod request;
 
-    /// The Connect package is sent but the connack is not received yet
-    ConnectSent,
+const RECONNECT_DURATION: Duration = Duration::from_secs(5);
 
-    Connected,
+/// Result returnes from methods that send packets to the network
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendResult {
+    PartiallySent,
 
-    Failed(MqttError)
+    /// Sent all pending packets to the network or nothing to send
+    SentAll,
+}
+
+impl SendResult {
+
+    pub async fn next<F, Fut>(self, f: F) -> Result<Self, MqttError> 
+    where F: FnOnce() -> Fut, Fut: Future<Output = Result<Self, MqttError>> {
+        if self != Self::PartiallySent {
+            let next = self + f().await?;
+            Ok(next)
+        } else {
+            Ok(self)
+        }
+    }
+
+    pub fn next_sync<F>(self, f: F) -> Result<Self, MqttError> 
+    where F: FnOnce() -> Result<Self, MqttError> {
+        if self != Self::PartiallySent {
+            let next = self + f()?;
+            Ok(next)
+        } else {
+            Ok(self)
+        }
+    }
 
 }
 
-pub(crate) struct State<'l, M: RawMutex> {
+impl Add<Self> for SendResult {
+    type Output = Self;
 
-    connection: blocking_mutex::Mutex<M, RefCell<ConnectionState>>,
-    config: ClientConfig,
-    ping: blocking_mutex::Mutex<M, RefCell<PingState>>,
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Self::SentAll, Self::SentAll) => Self::SentAll,
+            _ => Self::PartiallySent
+        }
+    }
+}
 
-    last_will: Option<LastWill<'l>>,
+pub struct State<'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> 
+where NET: TcpConnect, DNS: Dns {
 
-    pub(crate) publishes: PublishQueue,
-    pub(crate) received_publishes: ReceivedPublishQueue,
-    pub(crate) subscribes: SubQueue,
+    pub(crate) connection_state: TcpConnectionState<'n, 'l, M, NET, DNS, BUFFER>, 
+
+    ping: PingState<M>,
+
+    publishes: Publishes<M, QUEUE, BUFFER, TOPIC, 4>,
+    received_publishes: Receives<M, BUFFER, TOPIC, QUEUE>,
+    subscribes: Subs<M, TOPIC, QUEUE>,
 
     // Signal is sent, when a request is added
-    // TODO update to emassy_sync::watch::Watch is update is there
-    pub(crate) on_requst_added: Signal<M, usize>,
+    on_requst_added: RequestState<M>,
 
-    pub(crate) pid_source: PidSource
+    events: PubSubChannel<M, MqttEvent, 8, 16, 2>
 
 }
 
-impl <'l, M: RawMutex> State<'l, M> {
+impl <'n, 'l, M: RawMutex, NET, DNS, const BUFFER: usize, const TOPIC: usize, const QUEUE: usize> State<'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> 
+where NET: TcpConnect, DNS: Dns{
 
-    pub fn new(config: ClientConfig, last_will: Option<LastWill<'l>>) -> Self {
+    pub fn new(config: ClientConfig<'l>, last_will: Option<LastWill<'l>>, network: &'n NET, dns: DNS) -> Self {
         Self {
-            connection: blocking_mutex::Mutex::new(RefCell::new(ConnectionState::InitialState)),
-            config,
-            ping: blocking_mutex::Mutex::new(RefCell::new(PingState::PingSuccess(time::now()))),
+            connection_state: TcpConnectionState::new(network, dns, last_will, config),
 
-            last_will: last_will,
+            ping: PingState::new(),
 
-            publishes: PublishQueue::new(),
-            received_publishes: ReceivedPublishQueue::new(),
-            subscribes: SubQueue::new(),
+            publishes: Publishes::new(),
+            received_publishes: Receives::new(),
+            subscribes: Subs::new(),
 
-            on_requst_added: Signal::new(),
-
-            pid_source: PidSource::new()
+            on_requst_added: RequestState::new(),
+            events: PubSubChannel::new(),
         }
     }
 
-    pub fn reset(&self) {
-        self.set_connection_state(ConnectionState::InitialState);
+    pub fn new_client(&self) -> MqttClient<'_, 'n, 'l, M, NET, DNS, BUFFER, TOPIC, QUEUE> {
+        MqttClient::new(self)
     }
 
-    fn set_connection_state(&self, new_state: ConnectionState) {
-        self.connection.lock(|inner| {
-            let mut inner = inner.borrow_mut();
-            *inner = new_state;
-        })
-    }
+    pub(crate) async fn publish(&self, topic: &str, payload: &[u8], qos: QoS, retain: bool, unique_id: UniqueID) -> Result<(), MqttError> {
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    fn get_connection_state(&self) -> ConnectionState {
-        self.connection.lock(|inner|{
-            inner.borrow().clone()
-        })
-    }
-
-    fn send_connect_package(&self, send_buffer: &mut impl BufferWriter) -> Result<(), MqttError> {
-
-        let mut connect_packet = Connect{
-            protocol: Protocol::MQTT311,
-            keep_alive: KEEP_ALIVE as u16,
-            client_id: &self.config.client_id,
-            clean_session: false,
-            last_will: self.last_will.clone(),
-            username: None,
-            password: None
+        let qospid = match qos {
+            QoS::AtMostOnce => QosPid::AtMostOnce,
+            QoS::AtLeastOnce => QosPid::AtLeastOnce(next_pid()),
+            QoS::ExactlyOnce => QosPid::ExactlyOnce(next_pid()),
         };
 
-        if let Some(cred) = &self.config.credentials {
-            connect_packet.username = Some(&cred.username);
-            connect_packet.password = Some(cred.password.as_bytes());
-        }
+        debug!("state: adding publish request with qos {}", &qospid);
 
-        let connect_packet = Packet::Connect(connect_packet);
+        let publish = Publish {
+            topic_name: topic,
+            dup: false,
+            qospid,
+            retain,
+            payload
+        };
 
-        let sent = Self::encode_packet(&connect_packet, send_buffer)?;
-        if sent {
-            self.set_connection_state(ConnectionState::ConnectSent);
-        }
+        self.publishes.publish(publish, unique_id).await?;
+        self.on_requst_added.notify_new_request();
 
         Ok(())
     }
 
-    fn encode_packet(packet: &Packet<'_>, send_buffer: &mut impl BufferWriter) -> Result<bool, MqttError> {
-        let result = encode_slice(packet, send_buffer);
+    pub(crate) async fn subscribe(&self, topics: &[&str], qos: QoS, unique_id: UniqueID) {
+        self.subscribes.add_subscribe_request(topics, qos, unique_id).await;
+        self.on_requst_added.notify_new_request();
+    }
 
-        match result {
-            Ok(n) => {
-                send_buffer.commit(n).unwrap();
-                trace!("successfully encoded {} package to send_buffer: {} bytes", packet.get_type(), n);
-                Ok(true)
-            },
-            Err(Error::WriteZero) => {
-                debug!("cannot write {} packet: buffer not enaugh space", packet.get_type());
+    pub(crate) async fn unsubscribe(&self, topics: &[&str], unique_id: UniqueID) {
+        self.subscribes.add_unsubscribe_request(topics, unique_id).await;
+        self.on_requst_added.notify_new_request();
+    }
+
+    pub(crate) fn disconnect(&self) {
+        self.on_requst_added.notify_disconnect();
+    }
+
+    /// Returns true until the client disconnects
+    async fn run_once(&self) -> Result<bool, MqttError> {
+        if self.connection_state.get_state() != Some(connection::ConnectionStateValue::Connected) {
+            info!("not connected yed: starting connection");
+            self.connection_state.connect().await?;
+        }
+
+        let publisher = self.events.dyn_publisher().unwrap();
+
+        debug!("event loop: start sending packets");
+
+        let send_packet_result = self.publishes.send_packets(&self.connection_state, publisher).await?
+            .next(|| self.received_publishes.send_packets(&self.connection_state)).await?
+            .next(|| self.subscribes.send(&self.connection_state)).await?
+            .next_sync(|| self.ping.send(&self.connection_state))?;
+
+        if send_packet_result == SendResult::PartiallySent {
+            debug!("partially sent packets, run io nonblocking");
+            if let Some(packet) = self.connection_state.run_io_nonblocking().await? {
+                self.process_packet(&packet).await?;
+            }
+            // Return early to rerun the loop faster
+            return Ok(true);
+        }
+
+        debug!("sent all packets, run io blocking");
+
+        // TODO make ping and resend future
+        let ping_future = self.ping.ping_pause();
+        let io_future = self.connection_state.run_io();
+        let request_added_future = self.on_requst_added.next_notification();
+
+        match select3(request_added_future, ping_future, io_future).await {
+            embassy_futures::select::Either3::First(request) if request == RequestNotification::Disconnect => {
+                debug!("run_once: disconnect request received");
                 Ok(false)
             },
-            Err(e) => {
-                error!("error encoding {} package: {}", packet.get_type(), e);
-                Err(MqttError::CodecError)
-            }
-        }
-    }
-
-    fn process_connack(&self, connack: &Connack) -> Result<Option<MqttEvent>, MqttError> {
-
-        match connack.code {
-            mqttrs2::ConnectReturnCode::Accepted => {
-                self.set_connection_state(ConnectionState::Connected);
-                info!("connction to broker established");
-
-                // Add autosubscribe requests
-                self.subscribes.add_auto_subscribes(
-                    &self.config.auto_subscribes,
-                    || self.pid_source.next_pid()
-                );
-
-                self.on_requst_added.signal(5);
-
-                Ok(Some(MqttEvent::Connected))
+            embassy_futures::select::Either3::Third(packet) => {
+                debug!("run_once: received packet");
+                let packet = packet?;
+                self.process_packet(&packet).await?;
+                Ok(true)
             },
-            mqttrs2::ConnectReturnCode::RefusedProtocolVersion | mqttrs2::ConnectReturnCode::RefusedIdentifierRejected | mqttrs2::ConnectReturnCode::ServerUnavailable => {
-                error!("connack returned error: {}", connack.code);
-                self.set_connection_state(ConnectionState::Failed(MqttError::ConnackError));
-                Err(MqttError::ConnackError)
+            _ => {
+                debug!("run_once: stop io, new event arrived");
+                Ok(true)
             },
-            mqttrs2::ConnectReturnCode::BadUsernamePassword | mqttrs2::ConnectReturnCode::NotAuthorized => {
-                error!("connack: authentication failed: {}", connack.code);
-                self.set_connection_state(ConnectionState::Failed(MqttError::AuthenticationError));
-                Err(MqttError::AuthenticationError)
+        }
+    }
+
+    pub async fn run(&self) -> Result<(), MqttError> {
+        loop {
+            match self.run_once().await {
+                Ok(true) => {},
+                Ok(false) => {
+                    // Disconnect
+                    self.connection_state.disconnect().await?;
+                    info!("disconnect: exit run loop");
+                    return Ok(())
+                },
+                Err(err) => {
+                    error!("connection error: {}", &err);
+                    match err {
+                        MqttError::ConnectionFailed2(_) |
+                        MqttError::ConnackError |
+                        MqttError::CodecError(_) |
+                        MqttError::ReceivedMessageTooLong |
+                        MqttError::QueueFull(_) |
+                        MqttError::UnexpectedAck(_)  => {
+                            self.connection_state.set_error();
+                            time::sleep(RECONNECT_DURATION).await;
+                        },
+
+                        err => {
+                            error!("not recoverable error: stop loop");
+                            return Err(err)
+                        },
+                    }
+                },
             }
         }
-    }
-
-    fn process_pingresp(&self) {
-        debug!("received pingresp from broker");
-        self.ping.lock(|inner|{
-            inner.borrow_mut().on_ping_response();
-        });
-    }
-
-    pub(crate) fn send_packets(&self, send_buffer: &mut impl BufferWriter, control_sender: & impl AsyncSender<MqttEvent>) -> Result<(), MqttError> {
-
-        let state = self.connection.lock(|inner| inner.borrow().clone());
-
-        match state {
-            ConnectionState::InitialState => self.send_connect_package(send_buffer),
-
-            // Do not send anything while connecting
-            ConnectionState::ConnectSent => Ok(()),
-
-            // Send ping, subscribes, publishes, ...
-            ConnectionState::Connected => self.send_packets_connected(send_buffer, control_sender),
-
-            ConnectionState::Failed(mqtt_error) => Err(mqtt_error.clone()),
-        }
-    }
-
-    pub(crate) fn send_ping(&self, send_buffer: &mut impl BufferWriter) -> Result<(), MqttError> {
-        self.ping.lock(|inner|{
-            let mut inner = inner.borrow_mut();
-
-            if inner.should_send_ping() {
-                let ping = Packet::Pingreq;
-                let sent = Self::encode_packet(&ping, send_buffer)?;
-                if sent {
-                    inner.ping_sent();
-                }
-            }
-    
-            Ok(())
-        })
-    }
-
-    fn send_packets_connected(&self, send_buffer: &mut impl BufferWriter, control_sender: &impl AsyncSender<MqttEvent>) -> Result<(), MqttError> {
-
-        let is_critical = self.ping.lock(|inner|{
-            inner.borrow().is_critical_delay()
-        });
-
-        // Do not do anything else if the ping delay is critical (near keepalive)
-        if is_critical {
-            warn!("ping delay is critical: skip network traffic");
-            return Ok(());
-        }
-
-        // QoS messages for received publishes
-        self.received_publishes.process(send_buffer)?;
-
-        // Subscribe & unsubscribe
-        self.subscribes.process(send_buffer)?;
-
-        // Publish and republish packets
-        self.publishes.process(send_buffer, control_sender)?;
-
-        Ok(())
     }
 
     /// Processes incoming packets
-    pub(crate) async fn process_packet(&self, p: &Packet<'_>, send_buffer: &mut impl BufferWriter, reveived_publishes: &impl AsyncSender<MqttPublish>) -> Result<Vec<MqttEvent, 16>, MqttError> {
+    async fn process_packet(&self, p: &Packet<'_>) -> Result<(), MqttError> {
+
+        let publisher = self.events.dyn_publisher().unwrap();
 
         match p {
             
-            Packet::Connack(connack) => {
-                self.process_connack(connack)
-                    .map(|op| op.as_vec())
+            Packet::Connack(_connack) => {
+                panic!("received connack: this must be handled by the connection module");
             },
             
             Packet::Publish(publish) => {
-                let publish = self.received_publishes.process_publish(publish).await;
-                if let Some(publish) = publish {
-                    reveived_publishes.send(publish).await;
-                }
+                self.received_publishes.on_publish(publish).await?;
+                Ok(())
+            },
 
-                Ok(Vec::new())
-            },
-            
-            Packet::Puback(pid) => {
-                let result = self.publishes.process_puback(pid);
-                Ok(result.as_vec())
-            },
-            
-            Packet::Pubrec(pid) => {
-                self.publishes.process_pubrec(pid, send_buffer)?;
-                Ok(Vec::new())
+            Packet::Puback(_) | Packet::Pubrec(_) | Packet::Pubcomp(_) => {
+                self.publishes.process_incoming_packet(p, publisher).await?;
+                Ok(())
             },
 
             Packet::Pubrel(pid) => {
-                self.received_publishes.process_pubrel(pid.clone());
-                Ok(Vec::new())
-            },
-
-            Packet::Pubcomp(pid) => {
-                let result = self.publishes.process_pubcomp(pid);
-                Ok(result.as_vec())
+                self.received_publishes.on_pubrel(*pid).await?;
+                Ok(())
             },
 
             Packet::Suback(suback) => {
-                let result = self.subscribes.process_suback(suback);
-                Ok(result.as_vec())
+                self.subscribes.on_suback(suback, publisher).await?;
+                Ok(())
             },
             
             Packet::Unsuback(pid) => {
-                let result = self.subscribes.process_unsuback(pid);
-                Ok(result.as_vec())
+                self.subscribes.on_unsuback(*pid, publisher).await;
+                Ok(())
             },
             
             Packet::Pingresp => {
-                self.process_pingresp();
-                Ok(Vec::new())
+                self.ping.on_ping_response();
+                Ok(())
             },
 
             // # These Packages cannot be send Server -> Client
@@ -307,337 +294,325 @@ impl <'l, M: RawMutex> State<'l, M> {
 
             unexpected => {
                 error!("unexpected packet {} received from broker", unexpected.get_type());
-                Ok(Vec::new())
+                Ok(())
             }
         }
     }
 
-    pub(crate) async fn on_ping_required(&self) {
-        match self.ping.lock(|p| p.borrow().ping_pause()) {
-            Some(pause) => time::sleep(pause).await,
-            None => {},
-        }
-        debug!("Mqtt ping required");
+    pub(crate) fn subscribe_events(&self) -> Result<DynSubscriber<'_, MqttEvent>, MqttError> {
+        self.events.dyn_subscriber().map_err(|e| e.into())
+    }
+
+    /// Subscribe to received publishes
+    pub fn subscribe_received_publishes(&self) -> Result<DynSubscriber<'_, ReceivedPublish<BUFFER, TOPIC>>, MqttError> {
+        self.received_publishes.subscribe_publishes()
     }
 
 }
 
-#[cfg(all(test, feature = "std"))]
-mod tests {
-    use core::time::Duration;
-    use std::time::Instant;
+// #[cfg(all(test, feature = "std"))]
+// mod tests {
+//     use core::time::Duration;
+//     use std::time::Instant;
 
-    use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
-    use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-    use heapless::{String, Vec};
-    use mqttrs2::{decode_slice_with_len, Connack, ConnectReturnCode, LastWill, Packet, PacketType, QoS};
+//     use embytes_buffer::{new_stack_buffer, Buffer, BufferReader, ReadWrite};
+//     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+//     use heapless::{String, Vec};
+//     use mqttrs2::{decode_slice_with_len, Connack, ConnectReturnCode, LastWill, Packet, PacketType, QoS};
 
-    use crate::{io::AsyncSender, state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
+//     use crate::{state::{ConnectionState, State, KEEP_ALIVE}, time, ClientConfig, MqttError, MqttEvent};
 
-    use super::ping::PingState;
+//     use super::ping::PingState;
 
-    struct PanicSender;
+//     struct Test<'t> {
+//         state: State<'t, CriticalSectionRawMutex>,
+//         send_buffer: Buffer<[u8; 1024]>,
+//         control_ch: Channel<CriticalSectionRawMutex, MqttEvent, 16>
+//     }
 
-    impl <T> AsyncSender<T> for PanicSender {
-        async fn send(&self, _item: T) {
-            panic!("called send() on PanicSender");
-        }
-        
-        fn try_send(&self, _item: T) -> Result<(), T> {
-            panic!("called try_send() on PanicSender");
-        }
-    }
+//     impl <'t> Test<'t> {
+//         fn new (config: ClientConfig) -> Self {
+//             Self {
+//                 state: State::new(config, None),
+//                 send_buffer: new_stack_buffer(),
+//                 control_ch: Channel::new()
+//             }
+//         }
 
-    struct Test<'t> {
-        state: State<'t, CriticalSectionRawMutex>,
-        send_buffer: Buffer<[u8; 1024]>,
-        control_ch: Channel<CriticalSectionRawMutex, MqttEvent, 16>
-    }
+//         fn new_with_last_will(config: ClientConfig, last_will: LastWill<'t>) -> Self {
+//             Self {
+//                 state: State::new(config, Some(last_will)),
+//                 send_buffer: new_stack_buffer(),
+//                 control_ch: Channel::new()
+//             }
+//         }
 
-    impl <'t> Test<'t> {
-        fn new (config: ClientConfig) -> Self {
-            Self {
-                state: State::new(config, None),
-                send_buffer: new_stack_buffer(),
-                control_ch: Channel::new()
-            }
-        }
+//         fn expect_no_packet(&mut self) {
+//             let reader = self.send_buffer.create_reader();
+//             let op = decode_slice_with_len(&reader).unwrap();
+//             assert_eq!(op, None);
+//         }
 
-        fn new_with_last_will(config: ClientConfig, last_will: LastWill<'t>) -> Self {
-            Self {
-                state: State::new(config, Some(last_will)),
-                send_buffer: new_stack_buffer(),
-                control_ch: Channel::new()
-            }
-        }
+//         fn expect_packet<R, F: FnOnce(&Packet<'_>) -> R>(&mut self, operator: F) -> R {
+//             let reader = self.send_buffer.create_reader();
+//             let (n, packet) = decode_slice_with_len(&reader).unwrap().expect("there must be a packet");
+//             reader.add_bytes_read(n);
 
-        fn expect_no_packet(&mut self) {
-            let reader = self.send_buffer.create_reader();
-            let op = decode_slice_with_len(&reader).unwrap();
-            assert_eq!(op, None);
-        }
+//             operator(&packet)
+//         }
 
-        fn expect_packet<R, F: FnOnce(&Packet<'_>) -> R>(&mut self, operator: F) -> R {
-            let reader = self.send_buffer.create_reader();
-            let (n, packet) = decode_slice_with_len(&reader).unwrap().expect("there must be a packet");
-            reader.add_bytes_read(n);
+//         async fn process_packet(&mut self, packet: &Packet<'_>) -> Result<Vec<MqttEvent, 16>, MqttError>{
+//             self.state.process_packet(
+//                 packet, 
+//                 &mut self.send_buffer.create_writer()
+//             ).await
+//         }
+//     }
 
-            operator(&packet)
-        }
+//     #[tokio::test]
+//     async fn test_on_ping_required() {
+//         time::test_time::set_static_now();
 
-        async fn process_packet(&mut self, packet: &Packet<'_>) -> Result<Vec<MqttEvent, 16>, MqttError>{
-            self.state.process_packet(
-                packet, 
-                &mut self.send_buffer.create_writer(), 
-                &PanicSender
-            ).await
-        }
-    }
+//         let mut config = ClientConfig{
+//             client_id: String::new(),
+//             credentials: None,
+//             auto_subscribes: Vec::new()
+//         };
 
-    #[tokio::test]
-    async fn test_on_ping_required() {
-        time::test_time::set_static_now();
+//         config.client_id.push_str("1234567890").unwrap();
 
-        let mut config = ClientConfig{
-            client_id: String::new(),
-            credentials: None,
-            auto_subscribes: Vec::new()
-        };
+//         let mut test = Test::new(config);
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
 
-        config.client_id.push_str("1234567890").unwrap();
+//         let ping_required = test.state.on_ping_required();
+//         tokio::pin!(ping_required);
 
-        let mut test = Test::new(config);
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+//         let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
+//         tokio::pin!(wait);
 
-        let ping_required = test.state.on_ping_required();
-        tokio::pin!(ping_required);
+//         tokio::select! {
+//             _ = &mut ping_required => {
+//                 panic!("ping is not required yet!");
+//             },
+//             _ = wait => {}
+//         }
 
-        let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
-        tokio::pin!(wait);
+//         let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
+//         tokio::pin!(wait);
 
-        tokio::select! {
-            _ = &mut ping_required => {
-                panic!("ping is not required yet!");
-            },
-            _ = wait => {}
-        }
+//         time::test_time::advance_time(Duration::from_secs(KEEP_ALIVE as u64) / 2 + Duration::from_secs(1));
 
-        let wait = tokio::time::sleep(core::time::Duration::from_millis(50));
-        tokio::pin!(wait);
-
-        time::test_time::advance_time(Duration::from_secs(KEEP_ALIVE as u64) / 2 + Duration::from_secs(1));
-
-        tokio::select! {
-            _ = &mut ping_required => {},
-            _ = wait => {
-                panic!("ping must be now required")
-            }
-        }
-    }
+//         tokio::select! {
+//             _ = &mut ping_required => {},
+//             _ = wait => {
+//                 panic!("ping must be now required")
+//             }
+//         }
+//     }
 
 
-    #[tokio::test]
-    async fn test_connect_and_connack() {
-        time::test_time::set_default();
+//     #[tokio::test]
+//     async fn test_connect_and_connack() {
+//         time::test_time::set_default();
 
-        let mut config = ClientConfig{
-            client_id: String::new(),
-            credentials: None,
-            auto_subscribes: Vec::new()
-        };
+//         let mut config = ClientConfig{
+//             client_id: String::new(),
+//             credentials: None,
+//             auto_subscribes: Vec::new()
+//         };
 
-        config.client_id.push_str("1234567890").unwrap();
+//         config.client_id.push_str("1234567890").unwrap();
 
-        let mut test = Test::new(config);
+//         let mut test = Test::new(config);
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::InitialState);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::InitialState);
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
 
-        test.expect_packet(|p| {
-            if let Packet::Connect(c) = p {
-                assert_eq!(c.client_id, "1234567890");
-                assert_eq!(c.password, None);
-                assert_eq!(c.username, None);
-            } else {
-                panic!("expected connect packet");
-            }
-        });
+//         test.expect_packet(|p| {
+//             if let Packet::Connect(c) = p {
+//                 assert_eq!(c.client_id, "1234567890");
+//                 assert_eq!(c.password, None);
+//                 assert_eq!(c.username, None);
+//             } else {
+//                 panic!("expected connect packet");
+//             }
+//         });
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
 
-        let event = test.process_packet(&Packet::Connack(Connack{
-            session_present: false,
-            code: ConnectReturnCode::Accepted
-        })).await.unwrap().into_iter().next().expect("expected connected event");
+//         let event = test.process_packet(&Packet::Connack(Connack{
+//             session_present: false,
+//             code: ConnectReturnCode::Accepted
+//         })).await.unwrap().into_iter().next().expect("expected connected event");
 
-        assert_eq!(MqttEvent::Connected, event);
+//         assert_eq!(MqttEvent::Connected, event);
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::Connected);
-    }
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::Connected);
+//     }
 
-    #[tokio::test]
-    async fn test_connect_and_connack_with_last_will() {
-        time::test_time::set_default();
+//     #[tokio::test]
+//     async fn test_connect_and_connack_with_last_will() {
+//         time::test_time::set_default();
 
-        let mut config = ClientConfig{
-            client_id: String::new(),
-            credentials: None,
-            auto_subscribes: Vec::new()
-        };
+//         let mut config = ClientConfig{
+//             client_id: String::new(),
+//             credentials: None,
+//             auto_subscribes: Vec::new()
+//         };
 
-        config.client_id.push_str("1234567890").unwrap();
+//         config.client_id.push_str("1234567890").unwrap();
 
-        const LAST_WILL_TOPIC: &str = "some/topic";
-        const LAST_WILL_MESSAGE: &str = "i-am-dead";
-        let last_will = LastWill {
-            topic: LAST_WILL_TOPIC,
-            message: LAST_WILL_MESSAGE.as_bytes(),
-            qos: QoS::ExactlyOnce,
-            retain: true
-        };
+//         const LAST_WILL_TOPIC: &str = "some/topic";
+//         const LAST_WILL_MESSAGE: &str = "i-am-dead";
+//         let last_will = LastWill {
+//             topic: LAST_WILL_TOPIC,
+//             message: LAST_WILL_MESSAGE.as_bytes(),
+//             qos: QoS::ExactlyOnce,
+//             retain: true
+//         };
 
-        let mut test = Test::new_with_last_will(config, last_will);
+//         let mut test = Test::new_with_last_will(config, last_will);
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::InitialState);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::InitialState);
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
 
-        test.expect_packet(|p| {
-            if let Packet::Connect(c) = p {
-                assert_eq!(c.client_id, "1234567890");
-                assert_eq!(c.password, None);
-                assert_eq!(c.username, None);
+//         test.expect_packet(|p| {
+//             if let Packet::Connect(c) = p {
+//                 assert_eq!(c.client_id, "1234567890");
+//                 assert_eq!(c.password, None);
+//                 assert_eq!(c.username, None);
                 
-                let received_last_will = c.last_will.as_ref().unwrap();
-                assert_eq!(received_last_will.message, LAST_WILL_MESSAGE.as_bytes());
-                assert_eq!(received_last_will.topic, LAST_WILL_TOPIC);
-                assert_eq!(received_last_will.qos, QoS::ExactlyOnce);
-                assert_eq!(received_last_will.retain, true);
-            } else {
-                panic!("expected connect packet");
-            }
-        });
+//                 let received_last_will = c.last_will.as_ref().unwrap();
+//                 assert_eq!(received_last_will.message, LAST_WILL_MESSAGE.as_bytes());
+//                 assert_eq!(received_last_will.topic, LAST_WILL_TOPIC);
+//                 assert_eq!(received_last_will.qos, QoS::ExactlyOnce);
+//                 assert_eq!(received_last_will.retain, true);
+//             } else {
+//                 panic!("expected connect packet");
+//             }
+//         });
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::ConnectSent);
 
-        let event = test.process_packet(&Packet::Connack(Connack{
-            session_present: false,
-            code: ConnectReturnCode::Accepted
-        })).await.unwrap().into_iter().next().expect("expected connected event");
+//         let event = test.process_packet(&Packet::Connack(Connack{
+//             session_present: false,
+//             code: ConnectReturnCode::Accepted
+//         })).await.unwrap().into_iter().next().expect("expected connected event");
 
-        assert_eq!(MqttEvent::Connected, event);
+//         assert_eq!(MqttEvent::Connected, event);
 
-        assert_eq!(test.state.get_connection_state(), ConnectionState::Connected);
-    }
+//         assert_eq!(test.state.get_connection_state(), ConnectionState::Connected);
+//     }
 
-    #[tokio::test]
-    async fn test_ping() {
-        let start_time = Instant::now();
-        time::test_time::set_time(start_time);
+//     #[tokio::test]
+//     async fn test_ping() {
+//         let start_time = Instant::now();
+//         time::test_time::set_time(start_time);
 
-        let config = ClientConfig{
-            client_id: String::new(),
-            credentials: None,
-            auto_subscribes: Vec::new()
-        };
+//         let config = ClientConfig{
+//             client_id: String::new(),
+//             credentials: None,
+//             auto_subscribes: Vec::new()
+//         };
 
-        let mut test = Test::new(config);
-        test.state.set_connection_state(ConnectionState::Connected);
+//         let mut test = Test::new(config);
+//         test.state.set_connection_state(ConnectionState::Connected);
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
-        test.expect_no_packet();
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
+//         test.expect_no_packet();
 
-        time::test_time::advance_time(Duration::from_secs(40));
+//         time::test_time::advance_time(Duration::from_secs(40));
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
-        test.expect_packet(|p| {
-            if Packet::Pingreq != *p {
-                panic!("expected Packet::Pingreq");
-            }
-        });
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.state.send_ping(&mut test.send_buffer.create_writer()).unwrap();
+//         test.expect_packet(|p| {
+//             if Packet::Pingreq != *p {
+//                 panic!("expected Packet::Pingreq");
+//             }
+//         });
 
-        test.state.ping.lock(|inner|{
-            let inner = inner.borrow();
+//         test.state.ping.lock(|inner|{
+//             let inner = inner.borrow();
 
-            if let PingState::AwaitingResponse { last_success, ping_request_sent } = *inner {
-                assert_eq!(last_success, start_time);
-                assert_eq!(ping_request_sent, start_time + Duration::from_secs(40));
-            } else {
-                panic!("expected PingState::AwaitingResponse");
-            }
-        });
-        time::test_time::advance_time(Duration::from_secs(2));
+//             if let PingState::AwaitingResponse { last_success, ping_request_sent } = *inner {
+//                 assert_eq!(last_success, start_time);
+//                 assert_eq!(ping_request_sent, start_time + Duration::from_secs(40));
+//             } else {
+//                 panic!("expected PingState::AwaitingResponse");
+//             }
+//         });
+//         time::test_time::advance_time(Duration::from_secs(2));
 
-        test.process_packet(&Packet::Pingresp).await.unwrap();
+//         test.process_packet(&Packet::Pingresp).await.unwrap();
 
-        test.state.ping.lock(|inner|{
-            let inner = inner.borrow();
+//         test.state.ping.lock(|inner|{
+//             let inner = inner.borrow();
 
-            if let PingState::PingSuccess(last_ping) = *inner {
-                assert_eq!(last_ping, start_time + Duration::from_secs(42));
-            } else {
-                panic!("expected PingState::PingSuccess");
-            }
-        });
+//             if let PingState::PingSuccess(last_ping) = *inner {
+//                 assert_eq!(last_ping, start_time + Duration::from_secs(42));
+//             } else {
+//                 panic!("expected PingState::PingSuccess");
+//             }
+//         });
 
-    }
+//     }
 
-    #[tokio::test]
-    async fn test_auto_subscribe() {
+//     #[tokio::test]
+//     async fn test_auto_subscribe() {
 
-        let config: ClientConfig = ClientConfig::new_with_auto_subscribes(
-            "asghfdasdhasdh", 
-            None, 
-            [ "test1", "test2" ].into_iter(), 
-            QoS::AtLeastOnce
-        );
+//         let config: ClientConfig = ClientConfig::new_with_auto_subscribes(
+//             "asghfdasdhasdh", 
+//             None, 
+//             [ "test1", "test2" ].into_iter(), 
+//             QoS::AtLeastOnce
+//         );
 
-        let mut test = Test::new(config);
+//         let mut test = Test::new(config);
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.expect_packet(|p|{
-            assert_eq!(p.get_type(), PacketType::Connect, "expected connect packet");
-        });
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.expect_packet(|p|{
+//             assert_eq!(p.get_type(), PacketType::Connect, "expected connect packet");
+//         });
 
-        test.process_packet(&Packet::Connack(Connack { 
-            session_present: false, 
-            code: ConnectReturnCode::Accepted 
-        })).await.unwrap();
+//         test.process_packet(&Packet::Connack(Connack { 
+//             session_present: false, 
+//             code: ConnectReturnCode::Accepted 
+//         })).await.unwrap();
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.expect_packet(|p|{
-            if let Packet::Subscribe(s) = p {
-                assert_eq!(1, s.topics.len());
-                let topic = s.topics.first().unwrap();
-                assert_eq!(&topic.topic_path, "test1");
-                assert_eq!(topic.qos, QoS::AtLeastOnce);
-            } else {
-                panic!("expected subscribe packet but got {:?}", p.get_type());
-            }
-        });
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.expect_packet(|p|{
+//             if let Packet::Subscribe(s) = p {
+//                 assert_eq!(1, s.topics.len());
+//                 let topic = s.topics.first().unwrap();
+//                 assert_eq!(&topic.topic_path, "test1");
+//                 assert_eq!(topic.qos, QoS::AtLeastOnce);
+//             } else {
+//                 panic!("expected subscribe packet but got {:?}", p.get_type());
+//             }
+//         });
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.expect_packet(|p|{
-            if let Packet::Subscribe(s) = p {
-                assert_eq!(1, s.topics.len());
-                let topic = s.topics.first().unwrap();
-                assert_eq!(&topic.topic_path, "test2");
-                assert_eq!(topic.qos, QoS::AtLeastOnce);
-            } else {
-                panic!("expected subscribe packet but got {:?}", p.get_type());
-            }
-        });
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.expect_packet(|p|{
+//             if let Packet::Subscribe(s) = p {
+//                 assert_eq!(1, s.topics.len());
+//                 let topic = s.topics.first().unwrap();
+//                 assert_eq!(&topic.topic_path, "test2");
+//                 assert_eq!(topic.qos, QoS::AtLeastOnce);
+//             } else {
+//                 panic!("expected subscribe packet but got {:?}", p.get_type());
+//             }
+//         });
 
-        test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
-        test.expect_no_packet();
-    }
+//         test.state.send_packets(&mut test.send_buffer.create_writer(), &test.control_ch).unwrap();
+//         test.expect_no_packet();
+//     }
 
-}
+// }

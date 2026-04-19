@@ -15,7 +15,6 @@ jobs:
         with:
           toolchain: stable
       - run: cargo build --no-default-features -F std
-      - run: cargo build --no-default-features -F std -F tracing
   build-rp-thumbv6m-none-eabi:
     runs-on: ubuntu-latest
     steps:
@@ -26,6 +25,9 @@ jobs:
           target: thumbv6m-none-eabi
       - run: cargo build --no-default-features -F embassy
       - run: cargo build --no-default-features -F embassy -F defmt
+      - run: cargo build --no-default-features -F embassy -F defmt -F ipv4 -F ipv6
+      - run: cargo build --no-default-features -F embassy -F defmt -F ipv6
+      - run: cargo build --no-default-features -F embassy -F defmt -F ipv4
   test-with-broker:
     runs-on: ubuntu-latest
     services:
@@ -54,5 +56,5 @@ jobs:
         with:
             toolchain: nightly
             override: true
-      - run: cargo test -F std -F tracing -F test_with_broker
+      - run: cargo test -F std -F test_with_broker
         working-directory: ./code

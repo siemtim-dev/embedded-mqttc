@@ -1,53 +1,125 @@
 use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+use heapless::Deque;
 use mqttrs2::Pid;
 
+#[cfg(test)]
+pub mod inspections {
+    use core::cell::RefCell;
+
+    use mqttrs2::Pid;
 
 
-pub struct PidSource {
-    counter: Mutex<CriticalSectionRawMutex, RefCell<Pid>>
+    extern crate std;
+
+    thread_local! {
+        pub static FREED_PIDS: RefCell<Vec<Pid>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn on_pid_freed(pid: Pid) {
+        FREED_PIDS.with_borrow_mut(|freed| freed.push(pid));
+    }
+
+    pub fn assert_freed(pid: Pid) {
+        let is_freed = FREED_PIDS.with_borrow(|freed| freed.contains(&pid));
+        assert!(is_freed, "assert that {:?} is freed", pid)
+    }
+
+    pub fn assert_not_freed(pid: Pid) {
+        let is_freed = FREED_PIDS.with_borrow(|freed| freed.contains(&pid));
+        assert!(! is_freed, "assert that {:?} is freed", pid)
+    }
+
 }
 
-impl PidSource {
-    pub fn new() -> Self {
+const PID_POOL_SIZE: usize = 16;
+
+static POOL: Mutex<CriticalSectionRawMutex, RefCell<PidPool<PID_POOL_SIZE>>> = Mutex::new(RefCell::new(PidPool::new()));
+
+pub fn next_pid() -> Pid {
+    POOL.lock(|inner| {
+        let mut inner = inner.borrow_mut();
+        inner.next_pid()
+    })
+}
+
+pub fn free_pid(pid: Pid) {
+    POOL.lock(|inner| {
+        let mut inner = inner.borrow_mut();
+        inner.free_pid(pid);
+    });
+
+    #[cfg(test)]
+    inspections::on_pid_freed(pid);
+}
+
+struct PidPool <const POOL_SIZE: usize>{
+    pool: Deque<u16, POOL_SIZE>,
+    next_new_pid: u16
+}
+
+impl <const POOL_SIZE: usize> PidPool<POOL_SIZE> {
+
+    const fn new() -> Self {
         Self {
-            counter: Mutex::new(RefCell::new(Pid::default()))
+            pool: Deque::new(),
+            next_new_pid: 1
         }
     }
 
-    /// Genrates the next unique pid for the packet
-    ///
-    pub(crate) fn next_pid(&self) -> Pid {
-        self.counter.lock(|pid|{
-            let mut pid = pid.borrow_mut();
+    fn next_pid(&mut self) -> Pid {
+        if let Some(pid) = self.pool.pop_front() {
+            trace!("next pid from pool {}", pid);
+            pid.try_into().expect("unexpected 0 in pid pool")
+        } else {
+            self.take()
+        }
+    }
 
-            let result = pid.clone();
-            *pid = result + 1;
-            result
-        })
+    fn take(&mut self) -> Pid {
+        let pid = self.next_new_pid;
+        if self.next_new_pid == u16::MAX {
+            panic!("used complete pid pool!");
+        } else {
+            self.next_new_pid += 1;
+        }
+        trace!("take new pid {}", pid);
+        pid.try_into().expect("counter wrong: should start at 1")
+    }
+
+    fn free_pid(&mut self, pid: Pid) {
+        trace!("free pid {}", pid);
+        match self.pool.push_back(pid.into()) {
+            Ok(()) => {},
+            Err(pid) => {
+                warn!("pool too small to hand back pid {}: lost forever", pid);
+            }
+        }
     }
 }
+
+
+
+
 
 
 #[cfg(test)]
 mod tests {
     extern crate std;
     use std::vec::Vec;
-    use std::sync::Arc;
     use std::thread;
 
     use mqttrs2::Pid;
 
-    use super::PidSource;
+    use crate::state::pid::PidPool;
 
     #[test]
     fn test_next_pid() {
-        let pid_source = PidSource::new();
         let mut pids = Vec::new();
 
         for _ in 0..1000 {
-            let pid = pid_source.next_pid();
+            let pid = super::next_pid();
 
             assert!( ! pids.iter().any(|el| *el == pid));
 
@@ -57,13 +129,12 @@ mod tests {
 
     #[test]
     fn test_concurrent_access() {
-        let pid_source = Arc::new(PidSource::new());
 
-        fn start(pid_source: Arc<PidSource>) -> thread::JoinHandle<Vec<Pid>> {
+        fn start() -> thread::JoinHandle<Vec<Pid>> {
             thread::spawn(move || {
                 let mut pids = Vec::new();
                 for _ in 0..100 {
-                    let pid = pid_source.next_pid();
+                    let pid = super::next_pid();
         
                     assert!( ! pids.iter().any(|el| *el == pid));
         
@@ -78,7 +149,7 @@ mod tests {
         let mut handles = Vec::new();
 
         for _ in 0..50 {
-            handles.push(start(pid_source.clone()));
+            handles.push(start());
         }
 
         for h in handles {
@@ -91,5 +162,20 @@ mod tests {
             assert_eq!(n, 1, "Pid {} was present {} times", pid.get(), n);
         }
 
+    }
+
+    #[test]
+    fn test_pid_reuse () {
+
+        let mut pool = PidPool::<16>::new();
+
+        let pid1 = pool.next_pid();
+        let pid2 = pool.next_pid();
+
+        assert!(pid1 != pid2);
+
+        pool.free_pid(pid1);
+        let pid3 = pool.next_pid();
+        assert_eq!(pid1, pid3); 
     }
 }

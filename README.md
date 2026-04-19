@@ -7,8 +7,7 @@ If you want to add one of the missing features, please submit a pull request.
 
 ## Protocol Versions
 
-- [x] MQTT 3.1.1 Support
-- [ ] MQTT 5 Support
+This crate supports MQTT 3.1.1. Support for MQTT 5 is planned but there will never be a dual support of both versions at the same time. 
 
 ## MQTT Features
 
@@ -22,9 +21,15 @@ If you want to add one of the missing features, please submit a pull request.
 - [x] QoS 2
 - [x] Automatically send ping
 
-## Other features
+# Version comparison
 
-- [x] stable Rust support
+| Feature | 0.x.x | 1.x.x |
+|---|---:|---:|
+| Network backend | Depends on `embassy-net` | Depends on `embedded-nal-async` |
+| Specification alignment | Initial implementation; some behaviors are implementation-defined | Improved behavior and fixes to better align with the MQTT specification |
+| Protocol support | MQTT 3.1.1 | MQTT 3.1.1 (same feature set) with spec-alignment improvements |
+| API stability | Existing API used by current integrations | Breaking API changes in places (migration of networking types and some call signatures) |
+
 
 # License
 

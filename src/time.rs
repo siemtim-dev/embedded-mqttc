@@ -3,7 +3,7 @@
 /// 
 /// This module is also used to dynamically exchange [`std::time`] and [`embassy_time`]
 
-#[cfg(feature = "embassy")]
+#[cfg(all(feature = "embassy", not(feature = "std")))]
 pub(crate) use embassy_time::{Duration, Instant};
 
 #[cfg(feature = "std")]
@@ -21,13 +21,18 @@ pub(crate) fn now() -> Instant {
 }
 
 #[cfg(feature = "std")]
-pub(crate) type SleepFuture = tokio::time::Sleep;
+type SleepInternFuture = tokio::time::Sleep;
 
-#[cfg(feature = "embassy")]
-#[allow(dead_code)]
-pub(crate) type SleepFuture = embassy_time::Timer;
+#[cfg(all(feature = "embassy", not(feature = "std")))]
+type SleepInternFuture = embassy_time::Timer;
 
-#[cfg(feature = "embassy")]
+#[cfg(not(test))]
+pub(crate) type SleepFuture = SleepInternFuture;
+
+#[cfg(all(test, feature = "std"))]
+pub(crate) type SleepFuture = test_time::TestTimeFuture;
+
+#[cfg(all(feature = "embassy", not(feature = "std")))]
 #[allow(dead_code)]
 fn sleep_intern(duration: Duration) -> SleepFuture {
     use embassy_time::Timer;
@@ -36,19 +41,19 @@ fn sleep_intern(duration: Duration) -> SleepFuture {
 }
 
 #[cfg(feature = "std")]
-fn sleep_intern(duration: Duration) -> SleepFuture {
+fn sleep_intern(duration: Duration) -> SleepInternFuture {
     use tokio::time::sleep;
 
     sleep(duration)
 }
 
-pub(crate) async fn sleep(duration: Duration) {
+pub(crate) fn sleep(duration: Duration) -> SleepFuture {
 
     #[cfg(not(test))]
-    sleep_intern(duration).await;
+    return sleep_intern(duration);
 
     #[cfg(all(test, feature = "std"))]
-    test_time::TestTimeFuture::new(duration).await;
+    return test_time::TestTimeFuture::new(duration);
 
     #[cfg(all(test, not(feature = "std")))]
     panic!("sleep({}) not supported in tests without std feature", duration);
@@ -67,9 +72,9 @@ pub(crate) mod test_time {
     use super::{now, Instant};
     use super::Duration;
 
-    pub(super) struct TestTimeFuture{
+    pub(crate) struct TestTimeFuture{
         wait_until: Instant,
-        wait_future: super::SleepFuture,
+        wait_future: super::SleepInternFuture,
     }
 
     impl TestTimeFuture {
